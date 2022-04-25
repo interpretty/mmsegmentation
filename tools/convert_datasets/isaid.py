@@ -85,8 +85,8 @@ def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
             img_patch = img[y_str:y_end, x_str:x_end, :]
             img_patch = Image.fromarray(img_patch.astype(np.uint8))
             image = osp.splitext(
-                src_path.split('/')[-1])[0] + '_' + str(y_str) + '_' + str(
-                    y_end) + '_' + str(x_str) + '_' + str(x_end) + '.png'
+                src_path.split('\\')[-1])[0] + '_' + str(y_str) + '_' + str(
+                y_end) + '_' + str(x_str) + '_' + str(x_end) + '.png'
             # print(image)
             save_path_image = osp.join(out_dir, 'img_dir', mode, str(image))
             img_patch.save(save_path_image)
@@ -134,10 +134,13 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
             lab_patch = label[y_str:y_end, x_str:x_end]
             lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
 
-            image = osp.splitext(src_path.split('/')[-1])[0].split(
+            image = osp.splitext(src_path.split('\\')[-1])[0].split(
                 '_')[0] + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
-                    x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'
-            lab_patch.save(osp.join(out_dir, 'ann_dir', mode, str(image)))
+                x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'
+            # 输出label
+            # mmcv.imwrite(np.mat(lab_patch), osp.join(out_dir, 'tmp', '1.png'))
+            mmcv.imwrite(np.mat(lab_patch), osp.join(out_dir, 'ann_dir', mode, str(image)))
+            # lab_patch.save(osp.join(out_dir, 'ann_dir', mode, str(image)))
 
 
 def parse_args():
@@ -204,18 +207,23 @@ def main():
                 zip_file = zipfile.ZipFile(img_zipp)
                 zip_file.extractall(os.path.join(tmp_dir, dataset_mode, 'img'))
             src_path_list = glob.glob(
-                os.path.join(tmp_dir, dataset_mode, 'img', 'images', '*.png'))
+                # os.path.join(tmp_dir, dataset_mode, 'img', 'images', '*.png'))
+                os.path.join(tmp_dir, dataset_mode, 'img', '*.png'))
 
             src_prog_bar = mmcv.ProgressBar(len(src_path_list))
-            for i, img_path in enumerate(src_path_list):
-                if dataset_mode != 'test':
-                    slide_crop_image(img_path, out_dir, dataset_mode, patch_H,
-                                     patch_W, overlap)
-
-                else:
-                    shutil.move(img_path,
-                                os.path.join(out_dir, 'img_dir', dataset_mode))
-                src_prog_bar.update()
+            # for i, img_path in enumerate(src_path_list):
+            #     # if dataset_mode == 'train' and i < 1300:
+            #     #     src_prog_bar.update()
+            #     #     continue
+            #
+            #     if dataset_mode != 'test':
+            #         slide_crop_image(img_path, out_dir, dataset_mode, patch_H,
+            #                          patch_W, overlap)
+            #
+            #     else:
+            #         shutil.move(img_path,
+            #                     os.path.join(out_dir, 'img_dir', dataset_mode))
+            #     src_prog_bar.update()
 
             if dataset_mode != 'test':
                 label_zipp_list = glob.glob(
@@ -227,8 +235,9 @@ def main():
                         os.path.join(tmp_dir, dataset_mode, 'lab'))
 
                 lab_path_list = glob.glob(
-                    os.path.join(tmp_dir, dataset_mode, 'lab', 'images',
-                                 '*.png'))
+                    # os.path.join(tmp_dir, dataset_mode, 'lab', 'images',
+                    #              '*.png'))
+                    os.path.join(tmp_dir, dataset_mode, 'lab', '*.png'))
                 lab_prog_bar = mmcv.ProgressBar(len(lab_path_list))
                 for i, lab_path in enumerate(lab_path_list):
                     slide_crop_label(lab_path, out_dir, dataset_mode, patch_H,
