@@ -209,6 +209,7 @@ class ShiftWindowMSA(BaseModule):
                 for w in w_slices:
                     img_mask[:, h, w, :] = cnt
                     cnt += 1
+            img_mask_np = img_mask.squeeze().cpu().numpy()
 
             # nW, window_size, window_size, 1
             mask_windows = self.window_partition(img_mask)

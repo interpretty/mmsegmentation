@@ -117,4 +117,11 @@ mmseg/.mim
 
 # Pytorch
 *.pth
+<<<<<<< HEAD
 checkpoints/
+=======
+
+# picture
+*.png
+*.tif
+>>>>>>> yang

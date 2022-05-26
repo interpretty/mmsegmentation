@@ -13,21 +13,7 @@ from PIL import Image
 iSAID_palette = \
     {
         0: (0, 0, 0),
-        1: (0, 0, 63),
-        2: (0, 63, 63),
-        3: (0, 63, 0),
-        4: (0, 63, 127),
-        5: (0, 63, 191),
-        6: (0, 63, 255),
-        7: (0, 127, 63),
-        8: (0, 127, 127),
-        9: (0, 0, 127),
-        10: (0, 0, 191),
-        11: (0, 0, 255),
-        12: (0, 191, 127),
-        13: (0, 127, 191),
-        14: (0, 127, 255),
-        15: (0, 100, 155)
+        1: (255, 255, 255)
     }
 
 iSAID_invert_palette = {v: k for k, v in iSAID_palette.items()}
@@ -134,8 +120,8 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
             lab_patch = label[y_str:y_end, x_str:x_end]
             lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
 
-            image = osp.splitext(src_path.split('\\')[-1])[0].split(
-                '_')[0] + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
+            image = osp.splitext(src_path.split('\\')[-1])[0]\
+                + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
                 x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'
             # 输出label
             # mmcv.imwrite(np.mat(lab_patch), osp.join(out_dir, 'tmp', '1.png'))
@@ -152,12 +138,12 @@ def parse_args():
 
     parser.add_argument(
         '--patch_width',
-        default=896,
+        default=512,
         type=int,
         help='Width of the cropped image patch')
     parser.add_argument(
         '--patch_height',
-        default=896,
+        default=512,
         type=int,
         help='Height of the cropped image patch')
     parser.add_argument(
@@ -175,7 +161,7 @@ def main():
     overlap = args.overlap_area  # overlap area
 
     if args.out_dir is None:
-        out_dir = osp.join('data', 'iSAID')
+        out_dir = osp.join('data', 'WHUBDS1')
     else:
         out_dir = args.out_dir
 
@@ -208,22 +194,22 @@ def main():
                 zip_file.extractall(os.path.join(tmp_dir, dataset_mode, 'img'))
             src_path_list = glob.glob(
                 # os.path.join(tmp_dir, dataset_mode, 'img', 'images', '*.png'))
-                os.path.join(tmp_dir, dataset_mode, 'img', '*.png'))
+                os.path.join(tmp_dir, dataset_mode, 'img', '*.tif'))
 
             src_prog_bar = mmcv.ProgressBar(len(src_path_list))
-            # for i, img_path in enumerate(src_path_list):
-            #     # if dataset_mode == 'train' and i < 1300:
-            #     #     src_prog_bar.update()
-            #     #     continue
-            #
-            #     if dataset_mode != 'test':
-            #         slide_crop_image(img_path, out_dir, dataset_mode, patch_H,
-            #                          patch_W, overlap)
-            #
-            #     else:
-            #         shutil.move(img_path,
-            #                     os.path.join(out_dir, 'img_dir', dataset_mode))
-            #     src_prog_bar.update()
+            for i, img_path in enumerate(src_path_list):
+                # if dataset_mode == 'train' and i < 1300:
+                #     src_prog_bar.update()
+                #     continue
+
+                if dataset_mode != 'test':
+                    slide_crop_image(img_path, out_dir, dataset_mode, patch_H,
+                                     patch_W, overlap)
+
+                else:
+                    shutil.move(img_path,
+                                os.path.join(out_dir, 'img_dir', dataset_mode))
+                src_prog_bar.update()
 
             if dataset_mode != 'test':
                 label_zipp_list = glob.glob(
@@ -237,7 +223,7 @@ def main():
                 lab_path_list = glob.glob(
                     # os.path.join(tmp_dir, dataset_mode, 'lab', 'images',
                     #              '*.png'))
-                    os.path.join(tmp_dir, dataset_mode, 'lab', '*.png'))
+                    os.path.join(tmp_dir, dataset_mode, 'lab', '*.tif'))
                 lab_prog_bar = mmcv.ProgressBar(len(lab_path_list))
                 for i, lab_path in enumerate(lab_path_list):
                     slide_crop_label(lab_path, out_dir, dataset_mode, patch_H,
