@@ -28,8 +28,8 @@ class WHUBuildingDatasetS1(CustomDataset):
 
     def __init__(self, **kwargs):
         super(WHUBuildingDatasetS1, self).__init__(
-            img_suffix='.tif',
-            seg_map_suffix='.tif',
+            img_suffix='.png',
+            seg_map_suffix='.png',
             ignore_index=255,
             **kwargs)
         assert osp.exists(self.img_dir)
