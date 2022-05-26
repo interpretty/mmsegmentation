@@ -1,4 +1,4 @@
-import os.path as osp
+# Copyright (c) OpenMMLab. All rights reserved.
 
 import mmcv
 from mmcv.utils import print_log
@@ -34,7 +34,7 @@ class iSAIDDataset(CustomDataset):
             seg_map_suffix='.png',
             ignore_index=255,
             **kwargs)
-        assert osp.exists(self.img_dir)
+        assert self.file_client.exists(self.img_dir)
 
     def load_annotations(self,
                          img_dir,

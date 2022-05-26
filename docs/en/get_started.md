@@ -9,26 +9,29 @@
 
 The compatible MMSegmentation and MMCV versions are as below. Please install the correct version of MMCV to avoid installation issues.
 
-| MMSegmentation version |        MMCV version        |
-|:----------------------:|:--------------------------:|
-|         master         |  mmcv-full>=1.4.4, <1.5.0  |
-|         0.21.0         |  mmcv-full>=1.4.4, <1.5.0  |
-|         0.20.0         | mmcv-full>=1.3.13, <1.5.0  |
-|         0.19.0         | mmcv-full>=1.3.13, <1.3.17 |
-|         0.18.0         | mmcv-full>=1.3.13, <1.3.17 |
-|         0.17.0         | mmcv-full>=1.3.7, <1.3.17  |
-|         0.16.0         | mmcv-full>=1.3.7, <1.3.17  |
-|         0.15.0         | mmcv-full>=1.3.7, <1.3.17  |
-|         0.14.1         | mmcv-full>=1.3.7, <1.3.17  |
-|         0.14.0         |  mmcv-full>=1.3.1, <1.3.2  |
-|         0.13.0         |  mmcv-full>=1.3.1, <1.3.2  |
-|         0.12.0         |  mmcv-full>=1.1.4, <1.3.2  |
-|         0.11.0         |  mmcv-full>=1.1.4, <1.3.0  |
-|         0.10.0         |  mmcv-full>=1.1.4, <1.3.0  |
-|         0.9.0          |  mmcv-full>=1.1.4, <1.3.0  |
-|         0.8.0          |  mmcv-full>=1.1.4, <1.2.0  |
-|         0.7.0          |  mmcv-full>=1.1.2, <1.2.0  |
-|         0.6.0          |  mmcv-full>=1.1.2, <1.2.0  |
+| MMSegmentation version |        MMCV version         | MMClassification version |
+| :--------------------: | :-------------------------: | :----------------------: |
+|         master         | mmcv-full>=1.4.4, \<=1.6.0  | mmcls>=0.20.1, \<=1.0.0  |
+|         0.24.1         | mmcv-full>=1.4.4, \<=1.6.0  | mmcls>=0.20.1, \<=1.0.0  |
+|         0.23.0         | mmcv-full>=1.4.4, \<=1.6.0  | mmcls>=0.20.1, \<=1.0.0  |
+|         0.22.0         | mmcv-full>=1.4.4, \<=1.6.0  | mmcls>=0.20.1, \<=1.0.0  |
+|         0.21.1         | mmcv-full>=1.4.4, \<=1.6.0  |       Not required       |
+|         0.20.2         | mmcv-full>=1.3.13, \<=1.6.0 |       Not required       |
+|         0.19.0         | mmcv-full>=1.3.13, \<1.3.17 |       Not required       |
+|         0.18.0         | mmcv-full>=1.3.13, \<1.3.17 |       Not required       |
+|         0.17.0         | mmcv-full>=1.3.7, \<1.3.17  |       Not required       |
+|         0.16.0         | mmcv-full>=1.3.7, \<1.3.17  |       Not required       |
+|         0.15.0         | mmcv-full>=1.3.7, \<1.3.17  |       Not required       |
+|         0.14.1         | mmcv-full>=1.3.7, \<1.3.17  |       Not required       |
+|         0.14.0         |  mmcv-full>=1.3.1, \<1.3.2  |       Not required       |
+|         0.13.0         |  mmcv-full>=1.3.1, \<1.3.2  |       Not required       |
+|         0.12.0         |  mmcv-full>=1.1.4, \<1.3.2  |       Not required       |
+|         0.11.0         |  mmcv-full>=1.1.4, \<1.3.0  |       Not required       |
+|         0.10.0         |  mmcv-full>=1.1.4, \<1.3.0  |       Not required       |
+|         0.9.0          |  mmcv-full>=1.1.4, \<1.3.0  |       Not required       |
+|         0.8.0          |  mmcv-full>=1.1.4, \<1.2.0  |       Not required       |
+|         0.7.0          |  mmcv-full>=1.1.2, \<1.2.0  |       Not required       |
+|         0.6.0          |  mmcv-full>=1.1.2, \<1.2.0  |       Not required       |
 
 :::{note}
 You need to run `pip uninstall mmcv` first if you have mmcv installed.
@@ -40,16 +43,16 @@ If mmcv and mmcv-full are both installed, there will be `ModuleNotFoundError`.
 a. Create a conda virtual environment and activate it.
 
 ```shell
-conda create -n open-mmlab python=3.7 -y
+conda create -n open-mmlab python=3.10 -y
 conda activate open-mmlab
 ```
 
 b. Install PyTorch and torchvision following the [official instructions](https://pytorch.org/).
-Here we use PyTorch 1.6.0 and CUDA 10.1.
+Here we use PyTorch 1.11.0 and CUDA 11.3.
 You may also switch to other version by specifying the version number.
 
 ```shell
-conda install pytorch=1.6.0 torchvision cudatoolkit=10.1 -c pytorch
+conda install pytorch=1.11.0 torchvision cudatoolkit=11.3 -c pytorch
 ```
 
 c. Install [MMCV](https://mmcv.readthedocs.io/en/latest/) following the [official instructions](https://mmcv.readthedocs.io/en/latest/#installation).
@@ -63,13 +66,13 @@ Install MMCV, we recommend you to install the pre-built mmcv as below.
 pip install mmcv-full -f https://download.openmmlab.com/mmcv/dist/{cu_version}/{torch_version}/index.html
 ```
 
-Please replace ``{cu_version}`` and ``{torch_version}`` in the url to your desired one. mmcv-full is only compiled on
+Please replace `{cu_version}` and `{torch_version}` in the url to your desired one. mmcv-full is only compiled on
 PyTorch 1.x.0 because the compatibility usually holds between 1.x.0 and 1.x.1. If your PyTorch version is 1.x.1,
 you can install mmcv-full compiled with PyTorch 1.x.0 and it usually works well.
-For example, to install the ``mmcv-full`` with ``CUDA 10.1`` and ``PyTorch 1.6.0``, use the following command:
+For example, to install the `mmcv-full` with `CUDA 11.3` and `PyTorch 1.11.0`, use the following command:
 
 ```shell
-pip install mmcv-full -f https://download.openmmlab.com/mmcv/dist/cu101/torch1.6/index.html
+pip install mmcv-full -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.11/index.html
 ```
 
 See [here](https://github.com/open-mmlab/mmcv#installation) for different versions of MMCV compatible to different PyTorch and CUDA versions.
@@ -85,7 +88,6 @@ cd ..
 ```
 
 **Important:** You need to run `pip uninstall mmcv` first if you have mmcv installed. Because if `mmcv` and `mmcv-full` are both installed, there will be `ModuleNotFoundError`.
-
 
 **Install mmcv for Windows (Experimental):**
 
@@ -144,7 +146,7 @@ pip install -e .  # or "python setup.py develop"
    you can install it before installing MMCV.
 5. Some dependencies are optional. Simply running `pip install -e .` will only install the minimum runtime requirements.
    To use optional dependencies like `cityscapessripts`  either install them manually with `pip install -r requirements/optional.txt` or specify desired extras when calling `pip` (e.g. `pip install -e .[optional]`). Valid keys for the extras field are: `all`, `tests`, `build`, and `optional`.
-:::
+   :::
 
 ### A from-scratch setup script
 
@@ -153,11 +155,11 @@ pip install -e .  # or "python setup.py develop"
 Here is a full script for setting up mmsegmentation with conda and link the dataset path (supposing that your dataset path is $DATA_ROOT).
 
 ```shell
-conda create -n open-mmlab python=3.7 -y
+conda create -n open-mmlab python=3.10 -y
 conda activate open-mmlab
 
-conda install pytorch=1.6.0 torchvision cudatoolkit=10.1 -c pytorch
-pip install mmcv-full -f https://download.openmmlab.com/mmcv/dist/cu101/torch1.6.0/index.html
+conda install pytorch=1.11.0 torchvision cudatoolkit=11.3 -c pytorch
+pip install mmcv-full -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.11.0/index.html
 git clone https://github.com/open-mmlab/mmsegmentation.git
 cd mmsegmentation
 pip install -e .  # or "python setup.py develop"
@@ -172,10 +174,10 @@ Here is a full script for setting up mmsegmentation with conda and link the data
 %DATA_ROOT%. Notice: It must be an absolute path).
 
 ```shell
-conda create -n open-mmlab python=3.7 -y
+conda create -n open-mmlab python=3.10 -y
 conda activate open-mmlab
 
-conda install pytorch=1.6.0 torchvision cudatoolkit=10.1 -c pytorch
+conda install pytorch=1.11.0 torchvision cudatoolkit=11.3 -c pytorch
 set PATH=full\path\to\your\cpp\compiler;%PATH%
 pip install mmcv
 
@@ -241,7 +243,7 @@ python demo/image_demo.py demo/demo.png configs/pspnet/pspnet_r50-d8_512x1024_40
     checkpoints/pspnet_r50-d8_512x1024_40k_cityscapes_20200605_003338-2966598c.pth --device cuda:0 --palette cityscapes
 ```
 
-A notebook demo can be found in [demo/inference_demo.ipynb](../demo/inference_demo.ipynb).
+A notebook demo can be found in [demo/inference_demo.ipynb](../../demo/inference_demo.ipynb).
 
 Now we also provide a demo script to test a single video.
 

@@ -12,7 +12,7 @@ The configs that are composed by components from `_base_` are called _primitive_
 
 For all configs under the same folder, it is recommended to have only **one** _primitive_ config. All other configs should inherit from the _primitive_ config. In this way, the maximum of inheritance level is 3.
 
-For easy understanding, we recommend contributors to inherit from exiting methods.
+For easy understanding, we recommend contributors to inherit from existing methods.
 For example, if some modification is made base on DeepLabV3, user may first inherit the basic DeepLabV3 structure by specifying `_base_ = ../deeplabv3/deeplabv3_r50_512x1024_40ki_cityscapes.py`, then modify the necessary fields in the config files.
 
 If you are building an entirely new method that does not share the structure with any of the existing methods, you may create a folder `xxxnet` under `configs`,
@@ -24,7 +24,7 @@ Please refer to [mmcv](https://mmcv.readthedocs.io/en/latest/understand_mmcv/con
 We follow the below style to name config files. Contributors are advised to follow the same style.
 
 ```
-{model}_{backbone}_[misc]_[gpu x batch_per_gpu]_{resolution}_{schedule}_{dataset}
+{model}_{backbone}_[misc]_[gpu x batch_per_gpu]_{resolution}_{iterations}_{dataset}
 ```
 
 `{xxx}` is required field and `[yyy]` is optional.
@@ -33,14 +33,14 @@ We follow the below style to name config files. Contributors are advised to foll
 - `{backbone}`: backbone type like `r50` (ResNet-50), `x101` (ResNeXt-101).
 - `[misc]`: miscellaneous setting/plugins of model, e.g. `dconv`, `gcb`, `attention`, `mstrain`.
 - `[gpu x batch_per_gpu]`: GPUs and samples per GPU, `8x2` is used by default.
-- `{schedule}`: training schedule, `20ki` means 20k iterations.
+- `{iterations}`: number of training iterations like `160k`.
 - `{dataset}`: dataset like `cityscapes`, `voc12aug`, `ade`.
 
 ## An Example of PSPNet
 
 To help the users have a basic idea of a complete config and the modules in a modern semantic segmentation system,
 we make brief comments on the config of PSPNet using ResNet50V1c as the following.
-For more detailed usage and the corresponding alternative for each modules, please refer to the API documentation.
+For more detailed usage and the corresponding alternative for each module, please refer to the API documentation.
 
 ```python
 norm_cfg = dict(type='SyncBN', requires_grad=True)  # Segmentation usually uses SyncBN
@@ -256,8 +256,8 @@ evaluation = dict(  # The config to build the evaluation hook. Please refer to m
 
 ### Ignore some fields in the base configs
 
-Sometimes, you may set `_delete_=True` to ignore some of fields in base configs.
-You may refer to [mmcv](https://mmcv.readthedocs.io/en/latest/understand_mmcv/config.html#inherit-from-base-config-with-ignored-fields) for simple inllustration.
+Sometimes, you may set `_delete_=True` to ignore some of the fields in base configs.
+You may refer to [mmcv](https://mmcv.readthedocs.io/en/latest/understand_mmcv/config.html#inherit-from-base-config-with-ignored-fields) for simple illustration.
 
 In MMSegmentation, for example, to change the backbone of PSPNet with the following config.
 
@@ -327,7 +327,7 @@ The `_delete_=True` would replace all old keys in `backbone` field with new keys
 
 Some intermediate variables are used in the configs files, like `train_pipeline`/`test_pipeline` in datasets.
 It's worth noting that when modifying intermediate variables in the children configs, user need to pass the intermediate variables into corresponding fields again.
-For example, we would like to change multi scale strategy to train/test a PSPNet. `train_pipeline`/`test_pipeline` are intermediate variable we would like modify.
+For example, we would like to change multi scale strategy to train/test a PSPNet. `train_pipeline`/`test_pipeline` are intermediate variable we would like to modify.
 
 ```python
 _base_ = '../pspnet/psp_r50_512x1024_40ki_cityscapes.py'
