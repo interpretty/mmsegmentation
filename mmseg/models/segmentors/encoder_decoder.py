@@ -159,8 +159,8 @@ class EncoderDecoder(BaseSegmentor):
         decode without padding.
         """
 
-        h_stride, w_stride = self.test_cfg.stride
-        h_crop, w_crop = self.test_cfg.crop_size
+        h_stride = w_stride = self.test_cfg.stride
+        h_crop = w_crop = self.test_cfg.crop_size
         batch_size, _, h_img, w_img = img.size()
         num_classes = self.num_classes
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
