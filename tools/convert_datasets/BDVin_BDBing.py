@@ -161,7 +161,8 @@ def main():
     overlap = args.overlap_area  # overlap area
 
     if args.out_dir is None:
-        out_dir = osp.join('data', 'WHUBDS')
+        # out_dir = osp.join('data', 'BDVin')
+        out_dir = osp.join('data', 'BDBing')
     else:
         out_dir = args.out_dir
 
@@ -194,8 +195,10 @@ def main():
                 zip_file.extractall(os.path.join(tmp_dir, dataset_mode, 'img'))
             src_path_list = glob.glob(
                 # os.path.join(tmp_dir, dataset_mode, 'img', 'images', '*.png'))
-                # os.path.join(tmp_dir, dataset_mode, 'img', '*.tif'))   # whubds1
-                os.path.join(tmp_dir, dataset_mode, 'img', 'image', '*.tif'))   # whubds2
+                # os.path.join(tmp_dir, dataset_mode, 'img', '*.png'))   # whubds1
+                # os.path.join(tmp_dir, dataset_mode, 'img', 'image', '*.tif'))   # whubds2
+                # os.path.join(tmp_dir, dataset_mode, 'img', '*.tif'))  # BDVin
+                os.path.join(tmp_dir, dataset_mode, 'img', '*.png'))  # BDBing
 
             src_prog_bar = mmcv.ProgressBar(len(src_path_list))
             for i, img_path in enumerate(src_path_list):
@@ -224,8 +227,8 @@ def main():
                 lab_path_list = glob.glob(
                     # os.path.join(tmp_dir, dataset_mode, 'lab', 'images',
                     #              '*.png'))
-                    # os.path.join(tmp_dir, dataset_mode, 'lab', '*.tif'))  # whubds1
-                    os.path.join(tmp_dir, dataset_mode, 'lab', 'label', '*.tif'))  # whubds2
+                    os.path.join(tmp_dir, dataset_mode, 'lab', '*.png'))  # whubds1
+                    # os.path.join(tmp_dir, dataset_mode, 'lab', 'label', '*.tif'))  # whubds2
                 lab_prog_bar = mmcv.ProgressBar(len(lab_path_list))
                 for i, lab_path in enumerate(lab_path_list):
                     slide_crop_label(lab_path, out_dir, dataset_mode, patch_H,

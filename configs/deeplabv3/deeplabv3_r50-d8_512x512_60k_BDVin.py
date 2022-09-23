@@ -1,11 +1,11 @@
 _base_ = [
-    '../_base_/models/deeplabv3_unet_s5-d16.py', '../_base_/datasets/whubds2.py',
-    '../_base_/default_runtime.py', '../_base_/schedules/schedule_60k.py'
+    '../_base_/models/deeplabv3_r50-d8.py', '../_base_/datasets/whubds1.py',
+    '../_base_/default_runtime.py', '../_base_/schedules/schedule_20k.py'
 ]
 
 norm_cfg = dict(type='BN', requires_grad=True)
 
-data_root = 'D:/Yang/Py/Dataset/WHUBDS2'
+data_root = 'D:/Yang/Py/Dataset/BDBing'
 
 data = dict(
     samples_per_gpu=4,
