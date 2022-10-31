@@ -5,7 +5,7 @@ _base_ = [
 
 norm_cfg = dict(type='BN', requires_grad=True)
 
-data_root = 'D:/Yang/Py/Dataset/BDBing'
+data_root = 'D:/Yang/Py/Dataset/BDVin'
 
 data = dict(
     samples_per_gpu=4,

@@ -2,12 +2,11 @@
 norm_cfg = dict(type='SyncBN', requires_grad=True)
 model = dict(
     type='EncoderDecoder',
-    pretrained='open-mmlab://resnet50_v1c',
+    pretrained='D:/Yang/Py/mmsegmentation/checkpoints/drn_d_54-0e0534ff.pth',
     backbone=dict(
-        type='drn_d_54',
-        block='Bottleneck',
-        layers=[1, 1, 3, 4, 6, 3, 1, 1],
-        arch='D'),
+        type='DRN',
+        depth=54,
+        norm_cfg=norm_cfg),
     decode_head=dict(
         type='ASPPHead',
         in_channels=2048,

@@ -3,112 +3,305 @@ import warnings
 
 import torch.nn as nn
 import torch.utils.checkpoint as cp
-import torch.utils.model_zoo as model_zoo
-import math
 from mmcv.cnn import build_conv_layer, build_norm_layer, build_plugin_layer
 from mmcv.runner import BaseModule
 from mmcv.utils.parrots_wrapper import _BatchNorm
 
 from ..builder import BACKBONES
-# from ..utils import ResLayer
-
-BatchNorm = nn.BatchNorm2d
-
-
-# __all__ = ['DRN', 'drn26', 'drn42', 'drn58']
-
-
-webroot = 'http://dl.yf.io/drn/'
-
-model_urls = {
-    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
-    'drn-c-26': webroot + 'drn_c_26-ddedf421.pth',
-    'drn-c-42': webroot + 'drn_c_42-9d336e8c.pth',
-    'drn-c-58': webroot + 'drn_c_58-0a53a92c.pth',
-    'drn-d-22': webroot + 'drn_d_22-4bd2f8ea.pth',
-    'drn-d-38': webroot + 'drn_d_38-eebb45f0.pth',
-    'drn-d-54': webroot + 'drn_d_54-0e0534ff.pth',
-    'drn-d-105': webroot + 'drn_d_105-12b40979.pth'
-}
-
-
-def conv3x3(in_planes, out_planes, stride=1, padding=1, dilation=1):
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=padding, bias=False, dilation=dilation)
+from ..utils import DrnLayer
 
 
 class BasicBlock(BaseModule):
+    """Basic block for ResNet."""
+
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None,
-                 dilation=(1, 1), residual=True):
-        super(BasicBlock, self).__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride,
-                             padding=dilation[0], dilation=dilation[0])
-        self.bn1 = BatchNorm(planes)
+    def __init__(self,
+                 inplanes,
+                 planes,
+                 stride=1,
+                 dilation=1,
+                 downsample=None,
+                 style='pytorch',
+                 with_cp=False,
+                 conv_cfg=None,
+                 norm_cfg=dict(type='BN'),
+                 dcn=None,
+                 plugins=None,
+                 init_cfg=None):
+        super(BasicBlock, self).__init__(init_cfg)
+        assert dcn is None, 'Not implemented yet.'
+        assert plugins is None, 'Not implemented yet.'
+
+        self.norm1_name, norm1 = build_norm_layer(norm_cfg, planes, postfix=1)
+        self.norm2_name, norm2 = build_norm_layer(norm_cfg, planes, postfix=2)
+
+        self.conv1 = build_conv_layer(
+            conv_cfg,
+            inplanes,
+            planes,
+            3,
+            stride=stride,
+            padding=dilation,
+            dilation=dilation,
+            bias=False)
+        self.add_module(self.norm1_name, norm1)
+        self.conv2 = build_conv_layer(
+            conv_cfg, planes, planes, 3, padding=1, bias=False)
+        self.add_module(self.norm2_name, norm2)
+
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes,
-                             padding=dilation[1], dilation=dilation[1])
-        self.bn2 = BatchNorm(planes)
         self.downsample = downsample
         self.stride = stride
-        self.residual = residual
+        self.dilation = dilation
+        self.with_cp = with_cp
+
+    @property
+    def norm1(self):
+        """nn.Module: normalization layer after the first convolution layer"""
+        return getattr(self, self.norm1_name)
+
+    @property
+    def norm2(self):
+        """nn.Module: normalization layer after the second convolution layer"""
+        return getattr(self, self.norm2_name)
 
     def forward(self, x):
-        residual = x
+        """Forward function."""
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+        def _inner_forward(x):
+            identity = x
 
-        out = self.conv2(out)
-        out = self.bn2(out)
+            out = self.conv1(x)
+            out = self.norm1(out)
+            out = self.relu(out)
 
-        if self.downsample is not None:
-            residual = self.downsample(x)
-        if self.residual:
-            out += residual
+            out = self.conv2(out)
+            out = self.norm2(out)
+
+            if self.downsample is not None:
+                identity = self.downsample(x)
+
+            out += identity
+
+            return out
+
+        if self.with_cp and x.requires_grad:
+            out = cp.checkpoint(_inner_forward, x)
+        else:
+            out = _inner_forward(x)
+
         out = self.relu(out)
 
         return out
 
 
 class Bottleneck(BaseModule):
+    """Bottleneck block for ResNet.
+
+    If style is "pytorch", the stride-two layer is the 3x3 conv layer, if it is
+    "caffe", the stride-two layer is the first 1x1 conv layer.
+    """
+
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None,
-                 dilation=(1, 1), residual=True):
-        super(Bottleneck, self).__init__()
-        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
-        self.bn1 = BatchNorm(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
-                               padding=dilation[1], bias=False,
-                               dilation=dilation[1])
-        self.bn2 = BatchNorm(planes)
-        self.conv3 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
-        self.bn3 = BatchNorm(planes * 4)
+    def __init__(self,
+                 inplanes,
+                 planes,
+                 stride=1,
+                 dilation=1,
+                 downsample=None,
+                 style='pytorch',
+                 with_cp=False,
+                 conv_cfg=None,
+                 norm_cfg=dict(type='BN'),
+                 dcn=None,
+                 plugins=None,
+                 init_cfg=None):
+        super(Bottleneck, self).__init__(init_cfg)
+        assert style in ['pytorch', 'caffe']
+        assert dcn is None or isinstance(dcn, dict)
+        assert plugins is None or isinstance(plugins, list)
+        if plugins is not None:
+            allowed_position = ['after_conv1', 'after_conv2', 'after_conv3']
+            assert all(p['position'] in allowed_position for p in plugins)
+
+        self.inplanes = inplanes
+        self.planes = planes
+        self.stride = stride
+        self.dilation = dilation
+        self.style = style
+        self.with_cp = with_cp
+        self.conv_cfg = conv_cfg
+        self.norm_cfg = norm_cfg
+        self.dcn = dcn
+        self.with_dcn = dcn is not None
+        self.plugins = plugins
+        self.with_plugins = plugins is not None
+
+        if self.with_plugins:
+            # collect plugins for conv1/conv2/conv3
+            self.after_conv1_plugins = [
+                plugin['cfg'] for plugin in plugins
+                if plugin['position'] == 'after_conv1'
+            ]
+            self.after_conv2_plugins = [
+                plugin['cfg'] for plugin in plugins
+                if plugin['position'] == 'after_conv2'
+            ]
+            self.after_conv3_plugins = [
+                plugin['cfg'] for plugin in plugins
+                if plugin['position'] == 'after_conv3'
+            ]
+
+        if self.style == 'pytorch':
+            self.conv1_stride = 1
+            self.conv2_stride = stride
+        else:
+            self.conv1_stride = stride
+            self.conv2_stride = 1
+
+        self.norm1_name, norm1 = build_norm_layer(norm_cfg, planes, postfix=1)
+        self.norm2_name, norm2 = build_norm_layer(norm_cfg, planes, postfix=2)
+        self.norm3_name, norm3 = build_norm_layer(
+            norm_cfg, planes * self.expansion, postfix=3)
+
+        self.conv1 = build_conv_layer(
+            conv_cfg,
+            inplanes,
+            planes,
+            kernel_size=1,
+            stride=self.conv1_stride,
+            bias=False)
+        self.add_module(self.norm1_name, norm1)
+        fallback_on_stride = False
+        if self.with_dcn:
+            fallback_on_stride = dcn.pop('fallback_on_stride', False)
+        if not self.with_dcn or fallback_on_stride:
+            self.conv2 = build_conv_layer(
+                conv_cfg,
+                planes,
+                planes,
+                kernel_size=3,
+                stride=self.conv2_stride,
+                padding=dilation,
+                dilation=dilation,
+                bias=False)
+        else:
+            assert self.conv_cfg is None, 'conv_cfg must be None for DCN'
+            self.conv2 = build_conv_layer(
+                dcn,
+                planes,
+                planes,
+                kernel_size=3,
+                stride=self.conv2_stride,
+                padding=dilation,
+                dilation=dilation,
+                bias=False)
+
+        self.add_module(self.norm2_name, norm2)
+        self.conv3 = build_conv_layer(
+            conv_cfg,
+            planes,
+            planes * self.expansion,
+            kernel_size=1,
+            bias=False)
+        self.add_module(self.norm3_name, norm3)
+
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
-        self.stride = stride
+
+        if self.with_plugins:
+            self.after_conv1_plugin_names = self.make_block_plugins(
+                planes, self.after_conv1_plugins)
+            self.after_conv2_plugin_names = self.make_block_plugins(
+                planes, self.after_conv2_plugins)
+            self.after_conv3_plugin_names = self.make_block_plugins(
+                planes * self.expansion, self.after_conv3_plugins)
+
+    def make_block_plugins(self, in_channels, plugins):
+        """make plugins for block.
+
+        Args:
+            in_channels (int): Input channels of plugin.
+            plugins (list[dict]): List of plugins cfg to build.
+
+        Returns:
+            list[str]: List of the names of plugin.
+        """
+        assert isinstance(plugins, list)
+        plugin_names = []
+        for plugin in plugins:
+            plugin = plugin.copy()
+            name, layer = build_plugin_layer(
+                plugin,
+                in_channels=in_channels,
+                postfix=plugin.pop('postfix', ''))
+            assert not hasattr(self, name), f'duplicate plugin {name}'
+            self.add_module(name, layer)
+            plugin_names.append(name)
+        return plugin_names
+
+    def forward_plugin(self, x, plugin_names):
+        """Forward function for plugins."""
+        out = x
+        for name in plugin_names:
+            out = getattr(self, name)(x)
+        return out
+
+    @property
+    def norm1(self):
+        """nn.Module: normalization layer after the first convolution layer"""
+        return getattr(self, self.norm1_name)
+
+    @property
+    def norm2(self):
+        """nn.Module: normalization layer after the second convolution layer"""
+        return getattr(self, self.norm2_name)
+
+    @property
+    def norm3(self):
+        """nn.Module: normalization layer after the third convolution layer"""
+        return getattr(self, self.norm3_name)
 
     def forward(self, x):
-        residual = x
+        """Forward function."""
 
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+        def _inner_forward(x):
+            identity = x
 
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
+            out = self.conv1(x)
+            out = self.norm1(out)
+            out = self.relu(out)
 
-        out = self.conv3(out)
-        out = self.bn3(out)
+            if self.with_plugins:
+                out = self.forward_plugin(out, self.after_conv1_plugin_names)
 
-        if self.downsample is not None:
-            residual = self.downsample(x)
+            out = self.conv2(out)
+            out = self.norm2(out)
+            out = self.relu(out)
 
-        out += residual
+            if self.with_plugins:
+                out = self.forward_plugin(out, self.after_conv2_plugin_names)
+
+            out = self.conv3(out)
+            out = self.norm3(out)
+
+            if self.with_plugins:
+                out = self.forward_plugin(out, self.after_conv3_plugin_names)
+
+            if self.downsample is not None:
+                identity = self.downsample(x)
+
+            out += identity
+
+            return out
+
+        if self.with_cp and x.requires_grad:
+            out = cp.checkpoint(_inner_forward, x)
+        else:
+            out = _inner_forward(x)
+
         out = self.relu(out)
 
         return out
@@ -116,303 +309,384 @@ class Bottleneck(BaseModule):
 
 @BACKBONES.register_module()
 class DRN(BaseModule):
+    """ResNet backbone.
 
-    def __init__(self, block, layers, num_classes=1000,
+    This backbone is the improved implementation of `Deep Residual Learning
+    for Image Recognition <https://arxiv.org/abs/1512.03385>`_.
+
+    Args:
+        depth (int): Depth of resnet, from {18, 34, 50, 101, 152}.
+        in_channels (int): Number of input image channels. Default: 3.
+        stem_channels (int): Number of stem channels. Default: 64.
+        base_channels (int): Number of base channels of res layer. Default: 64.
+        num_stages (int): Resnet stages, normally 4. Default: 4.
+        strides (Sequence[int]): Strides of the first block of each stage.
+            Default: (1, 2, 2, 2).
+        dilations (Sequence[int]): Dilation of each stage.
+            Default: (1, 1, 1, 1).
+        out_indices (Sequence[int]): Output from which stages.
+            Default: (0, 1, 2, 3).
+        style (str): `pytorch` or `caffe`. If set to "pytorch", the stride-two
+            layer is the 3x3 conv layer, otherwise the stride-two layer is
+            the first 1x1 conv layer. Default: 'pytorch'.
+        deep_stem (bool): Replace 7x7 conv in input stem with 3 3x3 conv.
+            Default: False.
+        avg_down (bool): Use AvgPool instead of stride conv when
+            downsampling in the bottleneck. Default: False.
+        frozen_stages (int): Stages to be frozen (stop grad and set eval mode).
+            -1 means not freezing any parameters. Default: -1.
+        conv_cfg (dict | None): Dictionary to construct and config conv layer.
+            When conv_cfg is None, cfg will be set to dict(type='Conv2d').
+            Default: None.
+        norm_cfg (dict): Dictionary to construct and config norm layer.
+            Default: dict(type='BN', requires_grad=True).
+        norm_eval (bool): Whether to set norm layers to eval mode, namely,
+            freeze running stats (mean and var). Note: Effect on Batch Norm
+            and its variants only. Default: False.
+        dcn (dict | None): Dictionary to construct and config DCN conv layer.
+            When dcn is not None, conv_cfg must be None. Default: None.
+        stage_with_dcn (Sequence[bool]): Whether to set DCN conv for each
+            stage. The length of stage_with_dcn is equal to num_stages.
+            Default: (False, False, False, False).
+        plugins (list[dict]): List of plugins for stages, each dict contains:
+
+            - cfg (dict, required): Cfg dict to build plugin.
+
+            - position (str, required): Position inside block to insert plugin,
+            options: 'after_conv1', 'after_conv2', 'after_conv3'.
+
+            - stages (tuple[bool], optional): Stages to apply plugin, length
+            should be same as 'num_stages'.
+            Default: None.
+        multi_grid (Sequence[int]|None): Multi grid dilation rates of last
+            stage. Default: None.
+        contract_dilation (bool): Whether contract first dilation of each layer
+            Default: False.
+        with_cp (bool): Use checkpoint or not. Using checkpoint will save some
+            memory while slowing down the training speed. Default: False.
+        zero_init_residual (bool): Whether to use zero init for last norm layer
+            in resblocks to let them behave as identity. Default: True.
+        pretrained (str, optional): model pretrained path. Default: None.
+        init_cfg (dict or list[dict], optional): Initialization config dict.
+            Default: None.
+
+    Example:
+        >>> from mmseg.models import ResNet
+        >>> import torch
+        >>> self = ResNet(depth=18)
+        >>> self.eval()
+        >>> inputs = torch.rand(1, 3, 32, 32)
+        >>> level_outputs = self.forward(inputs)
+        >>> for level_out in level_outputs:
+        ...     print(tuple(level_out.shape))
+        (1, 64, 8, 8)
+        (1, 128, 4, 4)
+        (1, 256, 2, 2)
+        (1, 512, 1, 1)
+    """
+
+    arch_settings = {
+        54: (Bottleneck, (1, 1, 3, 4, 6, 3, 1, 1)),
+        56: (Bottleneck, (1, 1, 3, 4, 6, 3, 2, 2)),
+        105: (Bottleneck, (1, 1, 3, 4, 23, 3, 1, 1)),
+        157: (Bottleneck, (1, 1, 3, 4, 23, 3, 2, 2))
+    }
+
+    def __init__(self,
+                 depth,
+                 in_channels=3,
                  channels=(16, 32, 64, 128, 256, 512, 512, 512),
-                 out_map=False, out_middle=False, pool_size=28, arch='D'):
-        super(DRN, self).__init__()
-        self.inplanes = channels[0]
-        self.out_map = out_map
-        self.out_dim = channels[-1]
-        self.out_middle = out_middle
-        self.arch = arch
+                 stem_channels=16,
+                 base_channels=16,
+                 num_stages=8,
+                 strides=(1, 2, 2, 1, 1, 1, 1, 1),
+                 dilations=(1, 1, 1, 1, 2, 4, 2, 1),
+                 out_indices=(0, 1, 2, 3, 4, 5, 6, 7),
+                 style='pytorch',
+                 deep_stem=False,
+                 avg_down=False,
+                 frozen_stages=-1,
+                 conv_cfg=None,
+                 norm_cfg=dict(type='BN', requires_grad=True),
+                 norm_eval=False,
+                 dcn=None,
+                 stage_with_dcn=(False, False, False, False),
+                 plugins=None,
+                 multi_grid=None,
+                 contract_dilation=False,
+                 with_cp=False,
+                 zero_init_residual=True,
+                 pretrained=None,
+                 init_cfg=None):
+        super(DRN, self).__init__(init_cfg)
+        if depth not in self.arch_settings:
+            raise KeyError(f'invalid depth {depth} for drnet')
 
-        if arch == 'C':
-            self.conv1 = nn.Conv2d(3, channels[0], kernel_size=7, stride=1,
-                                   padding=3, bias=False)
-            self.bn1 = BatchNorm(channels[0])
+        self.pretrained = pretrained
+        self.zero_init_residual = zero_init_residual
+        block_init_cfg = None
+        assert not (init_cfg and pretrained), \
+            'init_cfg and pretrained cannot be setting at the same time'  # 条件为false执行
+        if isinstance(pretrained, str):
+            warnings.warn('DeprecationWarning: pretrained is a deprecated, '
+                          'please use "init_cfg" instead')
+            self.init_cfg = dict(type='Pretrained', checkpoint=pretrained)
+        elif pretrained is None:
+            if init_cfg is None:
+                self.init_cfg = [
+                    dict(type='Kaiming', layer='Conv2d'),
+                    dict(
+                        type='Constant',
+                        val=1,
+                        layer=['_BatchNorm', 'GroupNorm'])
+                ]
+                block = self.arch_settings[depth][0]
+                if self.zero_init_residual:
+                    if block is BasicBlock:
+                        block_init_cfg = dict(
+                            type='Constant',
+                            val=0,
+                            override=dict(name='norm2'))
+                    elif block is Bottleneck:
+                        block_init_cfg = dict(
+                            type='Constant',
+                            val=0,
+                            override=dict(name='norm3'))
+        else:
+            raise TypeError('pretrained must be a str or None')
+
+        self.depth = depth
+        self.stem_channels = stem_channels
+        self.base_channels = base_channels
+        self.num_stages = num_stages
+        assert 1 <= num_stages <= 8
+        self.strides = strides
+        self.dilations = dilations
+        assert len(strides) == len(dilations) == num_stages
+        self.out_indices = out_indices
+        assert max(out_indices) < num_stages
+        self.style = style
+        self.deep_stem = deep_stem
+        self.avg_down = avg_down
+        self.frozen_stages = frozen_stages
+        self.conv_cfg = conv_cfg
+        self.norm_cfg = norm_cfg
+        self.with_cp = with_cp
+        self.norm_eval = norm_eval
+        self.dcn = dcn
+        self.stage_with_dcn = stage_with_dcn
+        if dcn is not None:
+            assert len(stage_with_dcn) == num_stages
+        self.plugins = plugins
+        self.multi_grid = multi_grid
+        self.contract_dilation = contract_dilation
+        self.block, stage_blocks = self.arch_settings[depth]  # block=bottleneck, \
+        # stage_blocks=(1, 1, 3, 4, 6, 3, 1, 1)
+        self.stage_blocks = stage_blocks[:num_stages]
+        self.inplanes = stem_channels
+
+        self._make_stem_layer(in_channels, stem_channels)
+
+        self.drn_layers = []
+        for i, num_blocks in enumerate(self.stage_blocks):
+            stride = strides[i]
+            # stride = (1,2,2,1,1,1,1,1)
+            dilation = dilations[i]
+            # dilation = (1,1,1,1,2,4,2,1)
+            dcn = self.dcn if self.stage_with_dcn[i] else None
+            if plugins is not None:
+                stage_plugins = self.make_stage_plugins(plugins, i)
+            else:
+                stage_plugins = None
+            # multi grid is applied to last layer only
+            stage_multi_grid = multi_grid if i == len(
+                self.stage_blocks) - 1 else None
+            # planes = base_channels * 2 ** i
+            planes = channels[i]
+            drn_layer = self.make_drn_layer(
+                block=self.block,
+                inplanes=self.inplanes,
+                planes=planes,
+                num_blocks=num_blocks,
+                stride=stride,
+                dilation=dilation,
+                style=self.style,
+                avg_down=self.avg_down,
+                with_cp=with_cp,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                dcn=dcn,
+                plugins=stage_plugins,
+                multi_grid=stage_multi_grid,
+                contract_dilation=contract_dilation,
+                init_cfg=block_init_cfg)
+            if num_blocks != 1:
+                self.inplanes = planes * self.block.expansion
+            else:
+                self.inplanes = planes
+            layer_name = f'layer{i + 1}'
+            self.add_module(layer_name, drn_layer)
+            self.drn_layers.append(layer_name)
+
+        self._freeze_stages()
+
+        self.feat_dim = self.block.expansion * base_channels * 2 ** (
+                len(self.stage_blocks) - 1)
+
+    def make_stage_plugins(self, plugins, stage_idx):
+        """make plugins for ResNet 'stage_idx'th stage .
+
+        Currently we support to insert 'context_block',
+        'empirical_attention_block', 'nonlocal_block' into the backbone like
+        ResNet/ResNeXt. They could be inserted after conv1/conv2/conv3 of
+        Bottleneck.
+
+        An example of plugins format could be :
+        >>> plugins=[
+        ...     dict(cfg=dict(type='xxx', arg1='xxx'),
+        ...          stages=(False, True, True, True),
+        ...          position='after_conv2'),
+        ...     dict(cfg=dict(type='yyy'),
+        ...          stages=(True, True, True, True),
+        ...          position='after_conv3'),
+        ...     dict(cfg=dict(type='zzz', postfix='1'),
+        ...          stages=(True, True, True, True),
+        ...          position='after_conv3'),
+        ...     dict(cfg=dict(type='zzz', postfix='2'),
+        ...          stages=(True, True, True, True),
+        ...          position='after_conv3')
+        ... ]
+        >>> self = ResNet(depth=18)
+        >>> stage_plugins = self.make_stage_plugins(plugins, 0)
+        >>> assert len(stage_plugins) == 3
+
+        Suppose 'stage_idx=0', the structure of blocks in the stage would be:
+            conv1-> conv2->conv3->yyy->zzz1->zzz2
+        Suppose 'stage_idx=1', the structure of blocks in the stage would be:
+            conv1-> conv2->xxx->conv3->yyy->zzz1->zzz2
+
+        If stages is missing, the plugin would be applied to all stages.
+
+        Args:
+            plugins (list[dict]): List of plugins cfg to build. The postfix is
+                required if multiple same type plugins are inserted.
+            stage_idx (int): Index of stage to build
+
+        Returns:
+            list[dict]: Plugins for current stage
+        """
+        stage_plugins = []
+        for plugin in plugins:
+            plugin = plugin.copy()
+            stages = plugin.pop('stages', None)
+            assert stages is None or len(stages) == self.num_stages
+            # whether to insert plugin into current stage
+            if stages is None or stages[stage_idx]:
+                stage_plugins.append(plugin)
+
+        return stage_plugins
+
+    def make_drn_layer(self, **kwargs):
+        """Pack all blocks in a stage into a ``ResLayer``."""
+        return DrnLayer(**kwargs)
+
+    @property
+    def norm1(self):
+        """nn.Module: the normalization layer named "norm1" """
+        return getattr(self, self.norm1_name)
+
+    def _make_stem_layer(self, in_channels, stem_channels):
+        """Make stem layer for ResNet."""
+        if self.deep_stem:
+            self.stem = nn.Sequential(
+                build_conv_layer(
+                    self.conv_cfg,
+                    in_channels,
+                    stem_channels // 2,
+                    kernel_size=3,
+                    stride=2,
+                    padding=1,
+                    bias=False),
+                build_norm_layer(self.norm_cfg, stem_channels // 2)[1],
+                nn.ReLU(inplace=True),
+                build_conv_layer(
+                    self.conv_cfg,
+                    stem_channels // 2,
+                    stem_channels // 2,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False),
+                build_norm_layer(self.norm_cfg, stem_channels // 2)[1],
+                nn.ReLU(inplace=True),
+                build_conv_layer(
+                    self.conv_cfg,
+                    stem_channels // 2,
+                    stem_channels,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=False),
+                build_norm_layer(self.norm_cfg, stem_channels)[1],
+                nn.ReLU(inplace=True))
+        else:
+            self.conv1 = build_conv_layer(
+                self.conv_cfg,
+                in_channels,
+                stem_channels,
+                kernel_size=7,
+                stride=2,
+                padding=3,
+                bias=False)
+            self.norm1_name, norm1 = build_norm_layer(
+                self.norm_cfg, stem_channels, postfix=1)
+            self.add_module(self.norm1_name, norm1)
             self.relu = nn.ReLU(inplace=True)
+        # self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-            self.layer1 = self._make_layer(
-                BasicBlock, channels[0], layers[0], stride=1)
-            self.layer2 = self._make_layer(
-                BasicBlock, channels[1], layers[1], stride=2)
-        elif arch == 'D':
-            self.layer0 = nn.Sequential(
-                nn.Conv2d(3, channels[0], kernel_size=7, stride=1, padding=3,
-                          bias=False),
-                BatchNorm(channels[0]),
-                nn.ReLU(inplace=True)
-            )
+    def _freeze_stages(self):
+        """Freeze stages param and norm stats."""
+        if self.frozen_stages >= 0:
+            if self.deep_stem:
+                self.stem.eval()
+                for param in self.stem.parameters():
+                    param.requires_grad = False
+            else:
+                self.norm1.eval()
+                for m in [self.conv1, self.norm1]:
+                    for param in m.parameters():
+                        param.requires_grad = False
 
-            self.layer1 = self._make_conv_layers(
-                channels[0], layers[0], stride=1)
-            self.layer2 = self._make_conv_layers(
-                channels[1], layers[1], stride=2)
-
-        self.layer3 = self._make_layer(block, channels[2], layers[2], stride=2)
-        self.layer4 = self._make_layer(block, channels[3], layers[3], stride=2)
-        self.layer5 = self._make_layer(block, channels[4], layers[4],
-                                       dilation=2, new_level=False)
-        self.layer6 = None if layers[5] == 0 else \
-            self._make_layer(block, channels[5], layers[5], dilation=4,
-                             new_level=False)
-
-        if arch == 'C':
-            self.layer7 = None if layers[6] == 0 else \
-                self._make_layer(BasicBlock, channels[6], layers[6], dilation=2,
-                                 new_level=False, residual=False)
-            self.layer8 = None if layers[7] == 0 else \
-                self._make_layer(BasicBlock, channels[7], layers[7], dilation=1,
-                                 new_level=False, residual=False)
-        elif arch == 'D':
-            self.layer7 = None if layers[6] == 0 else \
-                self._make_conv_layers(channels[6], layers[6], dilation=2)
-            self.layer8 = None if layers[7] == 0 else \
-                self._make_conv_layers(channels[7], layers[7], dilation=1)
-
-        if num_classes > 0:
-            self.avgpool = nn.AvgPool2d(pool_size)
-            self.fc = nn.Conv2d(self.out_dim, num_classes, kernel_size=1,
-                                stride=1, padding=0, bias=True)
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
-            elif isinstance(m, BatchNorm):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-
-    def _make_layer(self, block, planes, blocks, stride=1, dilation=1,
-                    new_level=True, residual=True):
-        assert dilation == 1 or dilation % 2 == 0
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                BatchNorm(planes * block.expansion),
-            )
-
-        layers = list()
-        layers.append(block(
-            self.inplanes, planes, stride, downsample,
-            dilation=(1, 1) if dilation == 1 else (
-                dilation // 2 if new_level else dilation, dilation),
-            residual=residual))
-        self.inplanes = planes * block.expansion
-        for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes, residual=residual,
-                                dilation=(dilation, dilation)))
-
-        return nn.Sequential(*layers)
-
-    def _make_conv_layers(self, channels, convs, stride=1, dilation=1):
-        modules = []
-        for i in range(convs):
-            modules.extend([
-                nn.Conv2d(self.inplanes, channels, kernel_size=3,
-                          stride=stride if i == 0 else 1,
-                          padding=dilation, bias=False, dilation=dilation),
-                BatchNorm(channels),
-                nn.ReLU(inplace=True)])
-            self.inplanes = channels
-        return nn.Sequential(*modules)
+        for i in range(1, self.frozen_stages + 1):
+            m = getattr(self, f'layer{i}')
+            m.eval()
+            for param in m.parameters():
+                param.requires_grad = False
 
     def forward(self, x):
-        y = list()
-
-        if self.arch == 'C':
+        """Forward function."""
+        if self.deep_stem:
+            x = self.stem(x)
+        else:
             x = self.conv1(x)
-            x = self.bn1(x)
+            x = self.norm1(x)
             x = self.relu(x)
-        elif self.arch == 'D':
-            x = self.layer0(x)
+        # x = self.maxpool(x)
+        outs = []
+        for i, layer_name in enumerate(self.res_layers):
+            res_layer = getattr(self, layer_name)
+            x = res_layer(x)
+            if i in self.out_indices:
+                outs.append(x)
+        return tuple(outs)
 
-        x = self.layer1(x)
-        y.append(x)
-        x = self.layer2(x)
-        y.append(x)
-
-        x = self.layer3(x)
-        y.append(x)
-
-        x = self.layer4(x)
-        y.append(x)
-
-        x = self.layer5(x)
-        y.append(x)
-
-        if self.layer6 is not None:
-            x = self.layer6(x)
-            y.append(x)
-
-        if self.layer7 is not None:
-            x = self.layer7(x)
-            y.append(x)
-
-        if self.layer8 is not None:
-            x = self.layer8(x)
-            y.append(x)
-
-        if self.out_map:
-            x = self.fc(x)
-        else:
-            x = self.avgpool(x)
-            x = self.fc(x)
-            x = x.view(x.size(0), -1)
-
-        if self.out_middle:
-            return x, y
-        else:
-            return x
-
-
-@BACKBONES.register_module()
-class DRN_A(BaseModule):
-
-    def __init__(self, block, layers, num_classes=1000):
-        self.inplanes = 64
-        super(DRN_A, self).__init__()
-        self.out_dim = 512 * block.expansion
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
-                               bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=1,
-                                       dilation=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=1,
-                                       dilation=4)
-        self.avgpool = nn.AvgPool2d(28, stride=1)
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
-            elif isinstance(m, BatchNorm):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-
-    def _make_layer(self, block, planes, blocks, stride=1, dilation=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-        for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes,
-                                dilation=(dilation, dilation)))
-
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-
-        return x
-
-
-def drn_a_50(pretrained=False, **kwargs):
-    model = DRN_A(Bottleneck, [3, 4, 6, 3], **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
-    return model
-
-
-def drn_c_26(pretrained=False, **kwargs):
-    model = DRN(BasicBlock, [1, 1, 2, 2, 2, 2, 1, 1], arch='C', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-c-26']))
-    return model
-
-
-def drn_c_42(pretrained=False, **kwargs):
-    model = DRN(BasicBlock, [1, 1, 3, 4, 6, 3, 1, 1], arch='C', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-c-42']))
-    return model
-
-
-def drn_c_58(pretrained=False, **kwargs):
-    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='C', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-c-58']))
-    return model
-
-
-def drn_d_22(pretrained=False, **kwargs):
-    model = DRN(BasicBlock, [1, 1, 2, 2, 2, 2, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-22']))
-    return model
-
-
-def drn_d_24(pretrained=False, **kwargs):
-    model = DRN(BasicBlock, [1, 1, 2, 2, 2, 2, 2, 2], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-24']))
-    return model
-
-
-def drn_d_38(pretrained=False, **kwargs):
-    model = DRN(BasicBlock, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-38']))
-    return model
-
-
-def drn_d_40(pretrained=False, **kwargs):
-    model = DRN(BasicBlock, [1, 1, 3, 4, 6, 3, 2, 2], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-40']))
-    return model
-
-
-@BACKBONES.register_module()
-def drn_d_54(pretrained=False, **kwargs):
-    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-54']))
-    return model
-
-
-def drn_d_56(pretrained=False, **kwargs):
-    model = DRN(Bottleneck, [1, 1, 3, 4, 6, 3, 2, 2], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-56']))
-    return model
-
-
-def drn_d_105(pretrained=False, **kwargs):
-    model = DRN(Bottleneck, [1, 1, 3, 4, 23, 3, 1, 1], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-105']))
-    return model
-
-
-def drn_d_107(pretrained=False, **kwargs):
-    model = DRN(Bottleneck, [1, 1, 3, 4, 23, 3, 2, 2], arch='D', **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['drn-d-107']))
-    return model
+    def train(self, mode=True):
+        """Convert the model into training mode while keep normalization layer
+        freezed."""
+        super(DRN, self).train(mode)
+        self._freeze_stages()
+        if mode and self.norm_eval:
+            for m in self.modules():
+                # trick: eval have effect on BatchNorm only
+                if isinstance(m, _BatchNorm):
+                    m.eval()
