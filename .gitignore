@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# .开头的任何文件与文件夹
+.*
+
 # C extensions
 *.so
 
