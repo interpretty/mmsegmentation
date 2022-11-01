@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# .开头的任何文件与文件夹
+.*
+
 # C extensions
 *.so
 
@@ -90,6 +93,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.DS_Store
 
 # Spyder project settings
 .spyderproject
@@ -117,12 +121,19 @@ mmseg/.mim
 
 # Pytorch
 *.pth
+<<<<<<< HEAD
+checkpoints/
+=======
 
 # picture
 *.jpg
 *.png
 *.tif
+<<<<<<< HEAD
 
 # checkpoints
 checkpoints
 
+=======
+>>>>>>> yang
+>>>>>>> master

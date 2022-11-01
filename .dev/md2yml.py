@@ -12,10 +12,19 @@ import os.path as osp
 import re
 import sys
 
-import mmcv
 from lxml import etree
+from mmcv.fileio import dump
 
 MMSEG_ROOT = osp.dirname(osp.dirname((osp.dirname(__file__))))
+
+COLLECTIONS = [
+    'ANN', 'APCNet', 'BiSeNetV1', 'BiSeNetV2', 'CCNet', 'CGNet', 'DANet',
+    'DeepLabV3', 'DeepLabV3+', 'DMNet', 'DNLNet', 'DPT', 'EMANet', 'EncNet',
+    'ERFNet', 'FastFCN', 'FastSCNN', 'FCN', 'GCNet', 'ICNet', 'ISANet', 'KNet',
+    'NonLocalNet', 'OCRNet', 'PointRend', 'PSANet', 'PSPNet', 'Segformer',
+    'Segmenter', 'FPN', 'SETR', 'STDC', 'UNet', 'UPerNet'
+]
+COLLECTIONS_TEMP = []
 
 
 def dump_yaml_and_check_difference(obj, filename, sort_keys=False):
@@ -30,7 +39,7 @@ def dump_yaml_and_check_difference(obj, filename, sort_keys=False):
         Bool: If the target YAML file is different from the original.
     """
 
-    str_dump = mmcv.dump(obj, None, file_format='yaml', sort_keys=sort_keys)
+    str_dump = dump(obj, None, file_format='yaml', sort_keys=sort_keys)
     if osp.isfile(filename):
         file_exists = True
         with open(filename, 'r', encoding='utf-8') as f:
@@ -81,7 +90,14 @@ def parse_md(md_file):
     code_version = None
     repo_url = None
 
-    with open(md_file, 'r') as md:
+    # To avoid re-counting number of backbone model in OpenMMLab,
+    # if certain model in configs folder is backbone whose name is already
+    # recorded in MMClassification, then the `COLLECTION` dict of this model
+    # in MMSegmentation should be deleted, and `In Collection` in `Models`
+    # should be set with head or neck of this config file.
+    is_backbone = None
+
+    with open(md_file, 'r', encoding='UTF-8') as md:
         lines = md.readlines()
         i = 0
         current_dataset = ''
@@ -117,9 +133,14 @@ def parse_md(md_file):
                 datasets.append(line[4:])
                 current_dataset = line[4:]
                 i += 2
-            elif line[0] == '|' and (
-                    i + 1) < len(lines) and lines[i + 1][:3] == '| -':
+            elif line[:15] == '<!-- [BACKBONE]':
+                is_backbone = True
+                i += 1
+            elif (line[0] == '|' and (i + 1) < len(lines)
+                  and lines[i + 1][:3] == '| -' and 'Method' in line
+                  and 'Crop Size' in line and 'Mem (GB)' in line):
                 cols = [col.strip() for col in line.split('|')]
+                method_id = cols.index('Method')
                 backbone_id = cols.index('Backbone')
                 crop_size_id = cols.index('Crop Size')
                 lr_schd_id = cols.index('Lr schd')
@@ -151,15 +172,17 @@ def parse_md(md_file):
                             model_name = fn[:-3]
                     fps = els[fps_id] if els[fps_id] != '-' and els[
                         fps_id] != '' else -1
-                    mem = els[mem_id] if els[mem_id] != '-' and els[
-                        mem_id] != '' else -1
+                    mem = els[mem_id].split(
+                        '\\'
+                    )[0] if els[mem_id] != '-' and els[mem_id] != '' else -1
                     crop_size = els[crop_size_id].split('x')
                     assert len(crop_size) == 2
+                    method = els[method_id].split()[0].split('-')[-1]
                     model = {
                         'Name':
                         model_name,
                         'In Collection':
-                        collection_name,
+                        method,
                         'Metadata': {
                             'backbone': els[backbone_id],
                             'crop size': f'({crop_size[0]},{crop_size[1]})',
@@ -213,6 +236,7 @@ def parse_md(md_file):
     flag = (code_url is not None) and (paper_url is not None) and (repo_url
                                                                    is not None)
     assert flag, f'{collection_name} readme error'
+    collection['Name'] = method
     collection['Metadata']['Training Data'] = datasets
     collection['Code']['URL'] = code_url
     collection['Code']['Version'] = code_version
@@ -232,9 +256,21 @@ def parse_md(md_file):
                     collection.pop(check_key)
                 else:
                     collection[check_key].pop(key)
-
-    result = {'Collections': [collection], 'Models': models}
     yml_file = f'{md_file[:-9]}{collection_name}.yml'
+    if is_backbone:
+        if collection['Name'] not in COLLECTIONS:
+            result = {
+                'Collections': [collection],
+                'Models': models,
+                'Yml': yml_file
+            }
+            COLLECTIONS_TEMP.append(result)
+            return False
+        else:
+            result = {'Models': models}
+    else:
+        COLLECTIONS.append(collection['Name'])
+        result = {'Collections': [collection], 'Models': models}
     return dump_yaml_and_check_difference(result, yml_file)
 
 
@@ -248,9 +284,12 @@ def update_model_index():
     yml_files = glob.glob(osp.join(configs_dir, '**', '*.yml'), recursive=True)
     yml_files.sort()
 
+    # add .replace('\\', '/') to avoid Windows Style path
     model_index = {
-        'Import':
-        [osp.relpath(yml_file, MMSEG_ROOT) for yml_file in yml_files]
+        'Import': [
+            osp.relpath(yml_file, MMSEG_ROOT).replace('\\', '/')
+            for yml_file in yml_files
+        ]
     }
     model_index_file = osp.join(MMSEG_ROOT, 'model-index.yml')
     is_different = dump_yaml_and_check_difference(model_index,
@@ -267,6 +306,12 @@ if __name__ == '__main__':
     for fn in file_list:
         file_modified |= parse_md(fn)
 
-    file_modified |= update_model_index()
+    for result in COLLECTIONS_TEMP:
+        collection = result['Collections'][0]
+        yml_file = result.pop('Yml', None)
+        if collection['Name'] in COLLECTIONS:
+            result.pop('Collections')
+        file_modified |= dump_yaml_and_check_difference(result, yml_file)
 
+    file_modified |= update_model_index()
     sys.exit(1 if file_modified else 0)

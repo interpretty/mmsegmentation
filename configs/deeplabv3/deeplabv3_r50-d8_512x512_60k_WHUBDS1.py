@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3_r50-d8.py', '../_base_/datasets/whubds1.py',
-    '../_base_/default_runtime.py', '../_base_/schedules/schedule_160k.py'
+    '../_base_/default_runtime.py', '../_base_/schedules/schedule_60k.py'
 ]
 
 norm_cfg = dict(type='BN', requires_grad=True)

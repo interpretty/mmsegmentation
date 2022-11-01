@@ -47,6 +47,7 @@ class CascadeEncoderDecoder(EncoderDecoder):
             self.decode_head.append(builder.build_head(decode_head[i]))
         self.align_corners = self.decode_head[-1].align_corners
         self.num_classes = self.decode_head[-1].num_classes
+        self.out_channels = self.decode_head[-1].out_channels
 
     def encode_decode(self, img, img_metas):
         """Encode images with backbone and decode into a semantic segmentation
@@ -75,8 +76,12 @@ class CascadeEncoderDecoder(EncoderDecoder):
 
         for i in range(1, self.num_stages):
             # forward test again, maybe unnecessary for most methods.
-            prev_outputs = self.decode_head[i - 1].forward_test(
-                x, img_metas, self.test_cfg)
+            if i == 1:
+                prev_outputs = self.decode_head[0].forward_test(
+                    x, img_metas, self.test_cfg)
+            else:
+                prev_outputs = self.decode_head[i - 1].forward_test(
+                    x, prev_outputs, img_metas, self.test_cfg)
             loss_decode = self.decode_head[i].forward_train(
                 x, prev_outputs, img_metas, gt_semantic_seg, self.train_cfg)
             losses.update(add_prefix(loss_decode, f'decode_{i}'))

@@ -37,7 +37,7 @@ class STDCHead(FCNHead):
         # parameters. However, it is a constant in original repo and other
         # codebase because it would not be added into computation graph
         # after threshold operation.
-        seg_label = seg_label.float()
+        seg_label = seg_label.to(self.laplacian_kernel)
         boundary_targets = F.conv2d(
             seg_label, self.laplacian_kernel, padding=1)
         boundary_targets = boundary_targets.clamp(min=0)
@@ -67,19 +67,19 @@ class STDCHead(FCNHead):
         boundary_targets_x4_up[
             boundary_targets_x4_up <= self.boundary_threshold] = 0
 
-        boudary_targets_pyramids = torch.stack(
+        boundary_targets_pyramids = torch.stack(
             (boundary_targets, boundary_targets_x2_up, boundary_targets_x4_up),
             dim=1)
 
-        boudary_targets_pyramids = boudary_targets_pyramids.squeeze(2)
-        boudary_targets_pyramid = F.conv2d(boudary_targets_pyramids,
-                                           self.fusion_kernel)
+        boundary_targets_pyramids = boundary_targets_pyramids.squeeze(2)
+        boundary_targets_pyramid = F.conv2d(boundary_targets_pyramids,
+                                            self.fusion_kernel)
 
-        boudary_targets_pyramid[
-            boudary_targets_pyramid > self.boundary_threshold] = 1
-        boudary_targets_pyramid[
-            boudary_targets_pyramid <= self.boundary_threshold] = 0
+        boundary_targets_pyramid[
+            boundary_targets_pyramid > self.boundary_threshold] = 1
+        boundary_targets_pyramid[
+            boundary_targets_pyramid <= self.boundary_threshold] = 0
 
         loss = super(STDCHead, self).losses(seg_logit,
-                                            boudary_targets_pyramid.long())
+                                            boundary_targets_pyramid.long())
         return loss

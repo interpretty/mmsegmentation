@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import glob
 import os
@@ -84,9 +85,15 @@ def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
 
             img_patch = img[y_str:y_end, x_str:x_end, :]
             img_patch = Image.fromarray(img_patch.astype(np.uint8))
+<<<<<<< HEAD
             image = osp.splitext(
                 src_path.split('\\')[-1])[0] + '_' + str(y_str) + '_' + str(
                 y_end) + '_' + str(x_str) + '_' + str(x_end) + '.png'
+=======
+            image = osp.basename(src_path).split('.')[0] + '_' + str(
+                y_str) + '_' + str(y_end) + '_' + str(x_str) + '_' + str(
+                    x_end) + '.png'
+>>>>>>> 7628a61f920b6bd77f0dfe5e3074193ea3d13221
             # print(image)
             save_path_image = osp.join(out_dir, 'img_dir', mode, str(image))
             img_patch.save(save_path_image)
@@ -134,7 +141,11 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
             lab_patch = label[y_str:y_end, x_str:x_end]
             lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
 
+<<<<<<< HEAD
             image = osp.splitext(src_path.split('\\')[-1])[0].split(
+=======
+            image = osp.basename(src_path).split('.')[0].split(
+>>>>>>> 7628a61f920b6bd77f0dfe5e3074193ea3d13221
                 '_')[0] + '_' + str(y_str) + '_' + str(y_end) + '_' + str(
                 x_str) + '_' + str(x_end) + '_instance_color_RGB' + '.png'
             # 输出label
