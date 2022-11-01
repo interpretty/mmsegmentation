@@ -119,5 +119,10 @@ mmseg/.mim
 *.pth
 
 # picture
+*.jpg
 *.png
 *.tif
+
+# checkpoints
+checkpoints
+
