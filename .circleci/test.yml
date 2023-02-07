@@ -61,7 +61,7 @@ jobs:
           command: |
             pip install git+https://github.com/open-mmlab/mmengine.git@main
             pip install -U openmim
-            mim install 'mmcv>=2.0.0rc3'
+            mim install 'mmcv>=2.0.0rc4'
             pip install git+https://github.com/open-mmlab/mmclassification@dev-1.x
             pip install git+https://github.com/open-mmlab/mmdetection.git@dev-3.x
             pip install -r requirements/tests.txt -r requirements/optional.txt
@@ -108,7 +108,7 @@ jobs:
           command: |
             docker exec mmseg pip install -e /mmengine
             docker exec mmseg pip install -U openmim
-            docker exec mmseg mim install 'mmcv>=2.0.0rc3'
+            docker exec mmseg mim install 'mmcv>=2.0.0rc4'
             docker exec mmseg pip install -e /mmclassification
             docker exec mmseg pip install -e /mmdetection
             docker exec mmseg pip install -r requirements/tests.txt -r requirements/optional.txt
@@ -149,13 +149,14 @@ workflows:
           name: minimum_version_cpu
           torch: 1.6.0
           torchvision: 0.7.0
-          python: 3.6.9  # The lowest python 3.6.x version available on CircleCI images
+          python: "3.7"
           requires:
             - lint
       - build_cpu:
           name: maximum_version_cpu
-          torch: 1.12.1
-          torchvision: 0.13.1
+          # TODO: Fix torch 1.13 forward crush
+          torch: 1.12.0
+          torchvision: 0.13.0
           python: 3.9.0
           requires:
             - minimum_version_cpu
@@ -187,4 +188,3 @@ workflows:
               only:
                 - dev-1.x
                 - 1.x
-                - master
