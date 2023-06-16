@@ -1,6 +1,6 @@
 # dataset settings
 dataset_type = 'ISPRSDataset'
-data_root = 'data/vaihingen'
+data_root = 'C:/py/mmsegmentation/data/vaihingen'
 crop_size = (512, 512)
 train_pipeline = [
     dict(type='LoadImageFromFile'),
@@ -40,7 +40,7 @@ tta_pipeline = [
         ])
 ]
 train_dataloader = dict(
-    batch_size=4,
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
