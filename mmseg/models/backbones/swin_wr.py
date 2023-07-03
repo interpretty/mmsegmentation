@@ -48,13 +48,12 @@ class WindowMSA1(BaseModule):
                  attn_drop_rate=0.,
                  proj_drop_rate=0.,
                  init_cfg=None):
-
         super().__init__(init_cfg=init_cfg)
         self.embed_dims = embed_dims
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         head_embed_dims = embed_dims // num_heads
-        self.scale = qk_scale or head_embed_dims**-0.5
+        self.scale = qk_scale or head_embed_dims ** -0.5
 
         # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
@@ -159,7 +158,7 @@ class WindowMSA2(BaseModule):
         self.window_size = window_size  # Wh, Ww
         self.num_heads = num_heads
         head_embed_dims = embed_dims // num_heads
-        self.scale = qk_scale or head_embed_dims**-0.5
+        self.scale = qk_scale or head_embed_dims ** -0.5
 
         # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
@@ -204,35 +203,49 @@ class WindowMSA2(BaseModule):
         _, _, L, _ = sim_map.shape
         sim_map = sim_map.unsqueeze(-1)
         sim_map = sim_map.unsqueeze(-1)
-        sim_map = sim_map/4
-        sim_map = sim_map.expand(B,self.num_heads,L,L,4,4).contiguous()
+
+        # 改扩张思路
+        sim_map = sim_map / 4
+        expand_shape = list(sim_map.shape)
+        expand_shape[-2:] = [4, 4]
+        expand_tensor = torch.ones(expand_shape)
+        expand_tensor = expand_tensor.cuda()
+        sim_map = sim_map * expand_tensor
+        # sim_map = sim_map.expand(B,self.num_heads,L,L,4,4).contiguous()
 
         # q、k分块
         ws = self.window_size[0]
-        q = q.view(B,self.num_heads,ws,ws,-1)
-        k = k.view(B,self.num_heads,ws,ws,-1)
-        q = q.view(B,self.num_heads,ws//2,2,ws//2,2,-1).permute(0,1,2,4,3,5,6)
-        k = k.view(B,self.num_heads,ws//2,2,ws//2,2,-1).permute(0,1,2,4,3,5,6)
-        q = q.reshape(B,self.num_heads,ws//2*ws//2,4,-1)
-        k = k.reshape(B,self.num_heads,ws//2*ws//2,4,-1)
+        q = q.view(B, self.num_heads, ws, ws, -1)
+        k = k.view(B, self.num_heads, ws, ws, -1)
+        q = q.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6)
+        k = k.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6)
+        q = q.reshape(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+        k = k.reshape(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
         # q、k、aim_map广播方式的正确性？
         # attn与sim_map的norm?
         # 显存优化
+        # 应将扩大后的sim_map融入到attn中
+        # expand调整为与ones相乘进行广播
         k = k.transpose(-2, -1)
-        attn=q@k
+        attn = q @ k
 
         for i in range(sim_map.shape[0]):
             for j in range(sim_map.shape[1]):
                 for k in range(sim_map.shape[2]):
                     sim_map[i][j][k][k][:][:] = attn[i][j][k][:][:]
+
         attn = []
-        attn = sim_map.permute(0,1,2,4,3,5).reshape(B,self.num_heads,L*4,L*4)
+        attn = sim_map.permute(0, 1, 2, 4, 3, 5)
+        attn = attn.reshape(B, self.num_heads, ws // 2, ws // 2, 2, 2, ws // 2, ws // 2, 2, 2)
+        attn = attn.permute(0, 1, 2, 4, 3, 5, 6, 8, 7, 9)
+        attn = attn.reshape(B, self.num_heads, L * 4, L * 4)
+        # attn = sim_map.permute(0,1,2,4,3,5).reshape(B,self.num_heads,L*4,L*4)
 
         relative_position_bias = self.relative_position_bias_table[
             self.relative_position_index.view(-1)].view(
-                self.window_size[0] * self.window_size[1],
-                self.window_size[0] * self.window_size[1],
-                -1)  # Wh*Ww,Wh*Ww,nH
+            self.window_size[0] * self.window_size[1],
+            self.window_size[0] * self.window_size[1],
+            -1)  # Wh*Ww,Wh*Ww,nH
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         attn = attn + relative_position_bias.unsqueeze(0)
@@ -243,7 +256,6 @@ class WindowMSA2(BaseModule):
                              N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
         attn = self.softmax(attn)
-
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
@@ -329,7 +341,7 @@ class ShiftWindowMSA1(BaseModule):
         # nW*B, window_size, window_size, C
         query_windows = self.window_partition(shifted_query)
         # nW*B, window_size*window_size, C
-        query_windows = query_windows.view(-1, self.window_size**2, C)
+        query_windows = query_windows.view(-1, self.window_size ** 2, C)
 
         # W-MSA/SW-MSA (nW*B, window_size*window_size, C)
         attn_windows, sim_map = self.w_msa(query_windows, mask=attn_mask)
@@ -454,7 +466,7 @@ class ShiftWindowMSA2(BaseModule):
         # nW*B, window_size, window_size, C
         query_windows = self.window_partition(shifted_query)
         # nW*B, window_size*window_size, C
-        query_windows = query_windows.view(-1, self.window_size**2, C)
+        query_windows = query_windows.view(-1, self.window_size ** 2, C)
 
         # W-MSA/SW-MSA (nW*B, window_size*window_size, C)
         attn_windows, sim_map = self.w_msa(query_windows, mask=attn_mask, sim_map=sim_map)

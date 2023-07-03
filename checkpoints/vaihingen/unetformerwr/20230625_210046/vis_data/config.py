@@ -30,7 +30,7 @@ model = dict(
         style='pytorch',
         contract_dilation=True),
     decode_head=dict(
-        type='UNetFormerHeadMM',
+        type='UNetFormerHeadWR',
         in_channels=2048,
         channels=256,
         in_index=4,
@@ -215,4 +215,4 @@ default_hooks = dict(
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='SegVisualizationHook'))
 launcher = 'none'
-work_dir = 'C:\\PY\\mmsegmentation\\checkpoints\\vaihingen\\unetformermm'
+work_dir = 'C:\\PY\\mmsegmentation\\checkpoints\\vaihingen\\unetformerwr'

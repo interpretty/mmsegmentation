@@ -15,6 +15,7 @@ from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 from einops import rearrange
 from ..backbones.swin_wr import ShiftWindowMSA1, ShiftWindowMSA2
+from mmengine.analysis import get_model_complexity_info
 
 
 class SeparableConvBN(nn.Sequential):
@@ -288,7 +289,7 @@ class UNetFormerHeadWR(BaseDecodeHead):
                  encoder_channels=(256, 512, 1024, 2048),
                  decode_channels=256,
                  dropout=0.1,
-                 window_size=(64,32,16),
+                 window_size=(64, 32, 16),
                  **kwargs):
         super(UNetFormerHeadWR, self).__init__(**kwargs)
 
@@ -313,6 +314,13 @@ class UNetFormerHeadWR(BaseDecodeHead):
         #     ConvModule(decode_channels, self.num_classes, kernel_size=1))
 
     def forward(self, inputs):
+        # analysis_results = get_model_complexity_info(self.b4, input_shape=(256, 16, 16))
+        # print(analysis_results['out_table'])
+        # analysis_results = get_model_complexity_info(self.b3, input_shape=((256, 32, 32), (8, 256, 256)))
+        # print(analysis_results['out_table'])
+        # analysis_results = get_model_complexity_info(self.b2, input_shape=((256, 64, 64), (8, 1024, 1024)))
+        # print(analysis_results['out_table'])
+
         x, sim_map = self.b4(self.pre_conv(inputs[-1]))
         x = self.p3(x, inputs[-2])
         x, sim_map = self.b3(x, sim_map)
