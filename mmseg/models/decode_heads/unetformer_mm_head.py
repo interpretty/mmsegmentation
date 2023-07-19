@@ -198,12 +198,12 @@ class UNetFormerHeadMM(BaseDecodeHead):
             decode_channels,
             kernel_size=1,
             norm_cfg=dict(type='BN'))
-        self.b4 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
+        self.b4 = Block(dim=decode_channels, num_heads=8, window_size=16)
 
-        self.b3 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
+        self.b3 = Block(dim=decode_channels, num_heads=8, window_size=32)
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
+        self.b2 = Block(dim=decode_channels, num_heads=8, window_size=64)
         self.p2 = WF(encoder_channels[-3], decode_channels)
 
         self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
