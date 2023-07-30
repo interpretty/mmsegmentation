@@ -14,7 +14,8 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 from einops import rearrange
-from ..backbones.swin_wr import ShiftWindowMSA1, ShiftWindowMSA2
+from ..backbones.swin_wr_opt import ShiftWindowMSA
+# from ..backbones.swin_wr import ShiftWindowMSA
 from mmengine.analysis import get_model_complexity_info
 
 
@@ -49,7 +50,7 @@ class Mlp(nn.Module):
         return x
 
 
-class GlobalLocalAttention1(nn.Module):
+class GlobalLocalAttention(nn.Module):
     def __init__(self,
                  dim=256,
                  num_heads=16,
@@ -60,7 +61,7 @@ class GlobalLocalAttention1(nn.Module):
         super().__init__()
 
         head_embed_dims = dim // num_heads
-        self.attn = ShiftWindowMSA1(
+        self.attn = ShiftWindowMSA(
             embed_dims=dim,
             num_heads=num_heads,
             window_size=window_size,
@@ -84,62 +85,7 @@ class GlobalLocalAttention1(nn.Module):
         x = F.pad(x, pad=(0, 1, 0, 1), mode='reflect')
         return x
 
-    def forward(self, x):
-        local = self.local2(x) + self.local1(x)
-
-        hw_shape = (x.shape[2], x.shape[3])
-        attn = x.flatten(2).transpose(1, 2)
-        attn, sim_map = self.attn(attn, hw_shape)
-        attn = attn.transpose(1, 2)
-        attn = attn.reshape(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
-
-        out = self.attn_x(F.pad(attn, pad=(0, 0, 0, 1), mode='reflect')) + \
-              self.attn_y(F.pad(attn, pad=(0, 1, 0, 0), mode='reflect'))
-
-        out = out + local
-        out = self.pad_out(out)
-        out = self.proj(out)
-        # print(out.size())
-
-        return out, sim_map
-
-
-class GlobalLocalAttention2(nn.Module):
-    def __init__(self,
-                 dim=256,
-                 num_heads=16,
-                 qkv_bias=False,
-                 window_size=8,
-                 relative_pos_embedding=True
-                 ):
-        super().__init__()
-
-        head_embed_dims = dim // num_heads
-        self.attn = ShiftWindowMSA2(
-            embed_dims=dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=0,
-            qkv_bias=qkv_bias,
-            qk_scale=head_embed_dims ** -0.5,
-            attn_drop_rate=0.,
-            proj_drop_rate=0.,
-            dropout_layer=dict(type='DropPath', drop_prob=0.),
-            init_cfg=None
-        )
-
-        self.local1 = ConvModule(dim, dim, kernel_size=3, padding=1, norm_cfg=dict(type='BN'), act_cfg=None)
-        self.local2 = ConvModule(dim, dim, kernel_size=1, norm_cfg=dict(type='BN'), act_cfg=None)
-        self.proj = SeparableConvBN(dim, dim, kernel_size=window_size)
-
-        self.attn_x = nn.AvgPool2d(kernel_size=(window_size, 1), stride=1, padding=(window_size // 2 - 1, 0))
-        self.attn_y = nn.AvgPool2d(kernel_size=(1, window_size), stride=1, padding=(0, window_size // 2 - 1))
-
-    def pad_out(self, x):
-        x = F.pad(x, pad=(0, 1, 0, 1), mode='reflect')
-        return x
-
-    def forward(self, x, sim_map):
+    def forward(self, x, sim_map=None):
         local = self.local2(x) + self.local1(x)
 
         hw_shape = (x.shape[2], x.shape[3])
@@ -159,12 +105,12 @@ class GlobalLocalAttention2(nn.Module):
         return out, sim_map
 
 
-class Block1(nn.Module):
+class Block(nn.Module):
     def __init__(self, dim=256, num_heads=16, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.ReLU6, norm_layer=nn.BatchNorm2d, window_size=8):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.attn = GlobalLocalAttention1(dim, num_heads=num_heads, qkv_bias=qkv_bias, window_size=window_size)
+        self.attn = GlobalLocalAttention(dim, num_heads=num_heads, qkv_bias=qkv_bias, window_size=window_size)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -172,53 +118,12 @@ class Block1(nn.Module):
                        drop=drop)
         self.norm2 = norm_layer(dim)
 
-    def forward(self, x):
-        x, sim_map = self.attn(self.norm1(x))
-        x = x + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
-
-        return x, sim_map
-
-
-class Block2(nn.Module):
-    def __init__(self, dim=256, num_heads=16, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.ReLU6, norm_layer=nn.BatchNorm2d, window_size=8):
-        super().__init__()
-        self.norm1 = norm_layer(dim)
-        self.attn = GlobalLocalAttention2(dim, num_heads=num_heads, qkv_bias=qkv_bias, window_size=window_size)
-
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer,
-                       drop=drop)
-        self.norm2 = norm_layer(dim)
-
-    def forward(self, x, sim_map):
+    def forward(self, x, sim_map=None):
         x, sim_map = self.attn(self.norm1(x), sim_map)
         x = x + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
         return x, sim_map
-
-
-# class Block(nn.Module):
-#     def __init__(self, dim=256, num_heads=16, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
-#                  drop_path=0., act_layer=nn.ReLU6, norm_layer=nn.BatchNorm2d, window_size=8):
-#         super().__init__()
-#         self.norm1 = norm_layer(dim)
-#         self.attn = GlobalLocalAttention(dim, num_heads=num_heads, qkv_bias=qkv_bias, window_size=window_size)
-#
-#         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-#         mlp_hidden_dim = int(dim * mlp_ratio)
-#         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer,
-#                        drop=drop)
-#         self.norm2 = norm_layer(dim)
-#
-#     def forward(self, x):
-#         x = x + self.drop_path(self.attn(self.norm1(x)))
-#         x = x + self.drop_path(self.mlp(self.norm2(x)))
-#
-#         return x
 
 
 class WF(nn.Module):
@@ -298,12 +203,12 @@ class UNetFormerHeadWR(BaseDecodeHead):
             decode_channels,
             kernel_size=1,
             norm_cfg=dict(type='BN'))
-        self.b4 = Block1(dim=decode_channels, num_heads=8, window_size=window_size[-1])
+        self.b4 = Block(dim=decode_channels, num_heads=8, window_size=window_size[-1])
 
-        self.b3 = Block2(dim=decode_channels, num_heads=8, window_size=window_size[-2])
+        self.b3 = Block(dim=decode_channels, num_heads=8, window_size=window_size[-2])
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = Block2(dim=decode_channels, num_heads=8, window_size=window_size[-3])
+        self.b2 = Block(dim=decode_channels, num_heads=8, window_size=window_size[-3])
         self.p2 = WF(encoder_channels[-3], decode_channels)
 
         self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
