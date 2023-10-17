@@ -64,16 +64,11 @@ class WindowMSA(BaseModule):
         self.proj_drop = nn.Dropout(proj_drop_rate)
         self.softmax = nn.Softmax(dim=-1)
 
-        self.global_sim_map = None
-        self.global_attn_v = None
-        # # global global_attn_v
-        # self.global_attn_v = sw_global.global_attn_v
-
     # init_weights的作用
     def init_weights(self):
         trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def forward(self, x, mask=None, sim_map=None):
+    def forward(self, x, mask=None, attn1=None, attn2=None):
         """
         Args:
 
@@ -90,6 +85,7 @@ class WindowMSA(BaseModule):
         q, k, v = qkv[0], qkv[1], qkv[2]
         q = q * self.scale
 
+        # 生成相对位置特征
         relative_position_bias = self.relative_position_bias_table[
             self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1],
@@ -98,177 +94,7 @@ class WindowMSA(BaseModule):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
 
-        # relative_position_bias进行permute符合原对应关系
-        relative_position_bias_per = relative_position_bias.contiguous().view(
-            self.num_heads, ws // 2, 2, ws // 2, 2, ws // 2, 2, ws // 2, 2).permute(
-            0, 1, 3, 2, 4, 5, 7, 6, 8).reshape(
-            -1, ws // 2 * ws // 2, 4, ws // 2 * ws // 2, 4).permute(0, 1, 3, 2, 4)
-
-        # 取relative_position_bias斜对角区域
-        # Extract the diagonal blocks
-        diagonal_blocks = relative_position_bias_per.contiguous().diagonal(dim1=1, dim2=2)
-        # Reshape the diagonal blocks tensor into the desired shape (N, 4, 4)
-        diagonal_blocks = diagonal_blocks.reshape(self.num_heads, -1, 4, 4)
-
-        # 取relative_position_bias求取均值
-        # 此处可以优化
-        # block_averages1 = relative_position_bias_per.mean(dim=(3, 4))      # the wrong implementation
-        block_averages = relative_position_bias_per.contiguous()
-        diagonal = torch.diagonal(block_averages, dim1=1, dim2=2)
-        diagonal.fill_(0)
-        block_averages = block_averages.permute(0, 1, 3, 2, 4).reshape(self.num_heads, ws * ws, ws * ws)
-
-        if sim_map is not None:
-            _, _, L, _ = sim_map.shape
-
-            # q、k分块
-            q = q.view(B, self.num_heads, ws, ws, -1)
-            k = k.view(B, self.num_heads, ws, ws, -1)
-            q = q.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6)
-            k = k.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6)
-            q = q.reshape(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
-            k = k.reshape(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
-
-            attn = q @ k.transpose(-2, -1)
-
-            # 1、sim_map与v相乘，对应位置编码与v相乘
-            # （1）v聚合
-            v_sep = v.clone().view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 6, 2, 4, 3, 5).reshape(
-                B, self.num_heads, -1, ws // 2 * ws // 2, 4)
-            # 统一按照形状(B,H,C,WS,WS)
-            v_sep_sum = torch.sum(v_sep, -1, keepdim=True)
-            v_sep = v_sep.reshape(B, self.num_heads, -1, ws * ws, 1)
-
-            # （2）sim_map与block_averages分别乘v
-            # 取出global_sim_map的尺寸
-            self.global_sim_map = sw_global.global_sim_map.unsqueeze(2)
-            ws0 = int(math.sqrt(self.global_sim_map.shape[-1]))
-
-            # global_sim_map对角线已经为0
-            attn_sim = (self.global_sim_map @ v_sep_sum) / (ws // ws0 * ws // ws0)
-
-            # block_averages形状与v_sep保持一致
-            block_averages = block_averages.unsqueeze(1).unsqueeze(0)
-            attn_block_averages = block_averages @ v_sep
-            channel_attn = attn_block_averages.shape[2]
-            attn_block_averages = attn_block_averages.reshape(B, self.num_heads, channel_attn, ws0 * ws0, -1)
-
-            attn_sim = attn_sim + attn_block_averages
-
-            if self.global_attn_v is not None:
-                # 第三层，将对角线置为零
-                self.global_attn_v
-
-            # 2、attn与v相乘
-            # （1）v进行permute
-            v_diag = v.clone().view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
-                B, self.num_heads, ws // 2 * ws // 2, 4, -1)
-
-
-            # #
-            # # # 可删
-            # v_sample = v_diag.contiguous().reshape(B, self.num_heads, L * 4, -1)
-
-            # （2）attn加入位置因素
-            # attn_v = attn.contiguous()
-            attn_v = attn.contiguous() + diagonal_blocks.unsqueeze(0)
-
-            # attn_v的正则化
-            attn_v = self.softmax(attn_v)       # 仅能保证每次attention_map在归一化范围内
-
-            # 存储attn_v。归一化之后，在乘v之前
-            sw_global.global_attn_v = attn_v.contiguous()
-
-            # 统计attn_v的总和
-            sum_attn_v = attn_v.sum(dim=(-2, -1))
-
-            # # output attn_v
-            # numpy_array2 = attn_v[0,0].reshape(ws//2*ws//2,4*4).cpu().detach().numpy()
-            # df2 = pd.DataFrame(numpy_array2)
-            # df2.to_excel(r'C:\Users\WIN\Desktop\attn_v.xlsx', index=False)
-
-            # wrong:/(ws*ws) 为正则化，相当于每个attn_v元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
-            # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
-            # right:每四个元素加起来，和应为1/(ws/2*ws/2),
-            attn_v = (attn_v @ v_diag) / (ws // 2 * ws // 2)
-
-            # 3、合并attn_sim与attn_v
-
-            # 扩张attn_sim
-            # 不扩张，直接相加
-            # B, self.num_heads, features, ws // 2 * ws // 2, 1
-            # attn_sim = attn_sim.permute(0, 1, 3, 2)
-            # B, self.num_heads, features, ws // 2 * ws // 2, 4
-            attn_v = attn_v.permute(0, 1, 4, 2, 3)
-            attn_merge = attn_sim + attn_v
-            attn_merge = attn_merge.reshape(B, self.num_heads, -1, ws // 2, ws // 2, 2, 2).permute(0, 3, 5, 4, 6, 1, 2)
-            # 何处加入attn_drop？
-            x = attn_merge.reshape(B, ws * ws, -1)
-
-            # sim_map扩建，通过expand函数实现
-            # sim_map = sim_map.unsqueeze(-1).unsqueeze(-1)
-            # sim_map = sim_map.expand(-1, -1, -1, -1, 4, 4) / 4
-            # # sim_map填充
-            # # Get the shapes of sim_map1 and attn1
-            # s1, s2, s3, _, s4, s5 = sim_map.shape
-            # # Reshape sim_map1 and attn1 to match the required dimensions
-            # sim_map = sim_map.view(s1 * s2 * s3 * s3, s4 * s5).clone()
-            # attn = attn.view(s1 * s2 * s3, s4 * s5)
-            # # Create indices for indexing into sim_map1
-            # indices_0 = torch.arange(0, s3 * s3, s3 + 1).cuda()
-            # indices_1 = torch.cat([indices_0 + i * s3 * s3 for i in range(s1 * s2)]).cuda()
-            # # Use index_copy_ to update sim_map1 with attn1 values
-            # sim_map.index_copy_(0, indices_1, attn)
-            # # Reshape sim_map1 back to its original shape
-            # sim_map = sim_map.view(s1, s2, s3, s3, s4, s5)
-            # # attn: B, self.num_heads, ws//2*ws//2, ws//2*ws//2, 2*2, 2*2
-            # attn = sim_map.permute(0, 1, 2, 4, 3, 5)
-            # attn = attn.reshape(B, self.num_heads, ws // 2, ws // 2, 2, 2, ws // 2, ws // 2, 2, 2)
-
-            # # # output attn
-            # # numpy_array3 = attn[0,0].reshape(ws//2*ws//2*4,ws//2*ws//2*4).cpu().detach().numpy()
-            # # df3 = pd.DataFrame(numpy_array3)
-            # # df3.to_excel(r'C:\Users\WIN\Desktop\attn.xlsx', index=False)
-            #
-            # # 为取x前四层计算结果，取attn如下：
-            # attn_sample = attn.contiguous().reshape(B, self.num_heads, L * 4, L * 4)
-            # attn_sample = attn_sample[0,0,0:4,:]
-            # # 取v如下：
-            # v_sample
-            # # 导出
-            # numpy_array5 = attn_sample.cpu().detach().numpy()
-            # df5 = pd.DataFrame(numpy_array5)
-            # df5.to_excel(r'C:\Users\WIN\Desktop\attn_sample.xlsx', index=False)
-            # numpy_array6 = v_sample[0,0,:,:].cpu().detach().numpy()
-            # df6 = pd.DataFrame(numpy_array6)
-            # df6.to_excel(r'C:\Users\WIN\Desktop\v_sample.xlsx', index=False)
-
-            # block_attn_sample = attn.contiguous().reshape(B, self.num_heads, L * 4, L * 4)[0, 0, 0, 4:8]
-            # block_v_sample = v_sample[0, 0, 4:8, 0]
-            # block_sep = block_attn_sim * (torch.sum(block_v_sep))
-            # block_attn = block_attn_sample @ block_v_sample
-            # are_equal = torch.equal(block_sep, block_attn)
-            # print(are_equal)
-
-            # attn = attn.permute(0, 1, 2, 4, 3, 5, 6, 8, 7, 9)  #
-            # attn = attn.reshape(B, self.num_heads, L * 4, L * 4)  # B,num_heads,ws*ws,ws*ws
-            # attn = attn + relative_position_bias.unsqueeze(0)
-            # attn = self.softmax(attn)
-            # attn_merge = (attn @ v).transpose(1, 2).reshape(B, N, C)
-            # # # 判断attn_merge和是否一致
-            # are_equal = torch.equal(attn_merge, x)
-            # print(are_equal)
-
-            # attn = attn + relative_position_bias.unsqueeze(0)
-            # attn: B, self.num_heads, L * 4, L * 4
-            # v:
-            # x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-
-            # # 判断attn_merge和是否一致
-            # are_equal = torch.equal(attn_merge, x)
-            # print(are_equal)
-
-        else:
+        if attn1 is None:
             attn = (q @ k.transpose(-2, -1))
             attn = attn + relative_position_bias.unsqueeze(0)
 
@@ -276,14 +102,153 @@ class WindowMSA(BaseModule):
             attn = self.attn_drop(attn)
             x = (attn @ v).transpose(1, 2).reshape(B, N, C)
 
-            # global_sim_map对角线置为0
-            sw_global.global_sim_map = attn.contiguous()
-            diagonal = torch.diagonal(sw_global.global_sim_map, dim1=-2, dim2=-1)
-            diagonal.fill_(0)
+            # attn对角线置为0
+            diagonal_attn1 = torch.diagonal(attn, dim1=-2, dim2=-1)
+            diagonal_attn1.fill_(0)
+            attn1 = attn.contiguous()
+
+        else:
+            _, _, L, _ = attn1.shape
+
+            # 1、求对角区域的attn
+            # 以2为最小置换尺寸对q、k进行置换
+            # 一次置换
+            q = q.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
+                B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+            k = k.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
+                B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+            # 二次置换
+            if attn2 is not None:
+                q = q.view(B, self.num_heads, ws // 4, 2, ws // 4, 2, 4, -1).permute(0, 1, 2, 4, 3, 5, 6, 7).reshape(
+                    B, self.num_heads, ws // 4 * ws // 4 * 2 * 2, 4, -1)
+                k = k.view(B, self.num_heads, ws // 4, 2, ws // 4, 2, 4, -1).permute(0, 1, 2, 4, 3, 5, 6, 7).reshape(
+                    B, self.num_heads, ws // 4 * ws // 4 * 2 * 2, 4, -1)
+            # 求对角线区域的细化attn
+            attn = q @ k.transpose(-2, -1)
+
+            # 2、相对位置矩阵的分区域切分
+            # 相对位置参数
+            # 分区域切分
+            # relative_position_bias进行permute符合原对应关系
+            # 以2为最小置换尺寸进行置换
+            # 一次置换
+            relative_position_bias_per = relative_position_bias.contiguous().view(
+                self.num_heads, ws // 2, 2, ws // 2, 2, ws // 2, 2, ws // 2, 2).permute(
+                0, 1, 3, 2, 4, 5, 7, 6, 8).reshape(
+                self.num_heads, ws // 2 * ws // 2, 4, ws // 2 * ws // 2, 4).permute(0, 1, 3, 2, 4)
+            # 二次置换
+            if attn2 is not None:
+                relative_position_bias_per = relative_position_bias_per.reshape(
+                    self.num_heads, ws // 4, 2, ws // 4, 2, 4, ws // 4, 2, ws // 4, 2, 4).permute(
+                    0, 1, 3, 2, 4, 5, 6, 8, 7, 9, 10).reshape(
+                    self.num_heads, ws // 4 * ws // 4 * 2 * 2, 4, ws // 4 * ws // 4 * 2 * 2, 4).permute(0, 1, 3, 2, 4)
+
+            # 取relative_position_bias斜对角区域
+            # Extract the diagonal blocks
+            rpbp_diag = relative_position_bias_per.contiguous().diagonal(dim1=1, dim2=2)
+            # Reshape the diagonal blocks tensor into the desired shape (N, 4, 4)
+            rpbp_diag = rpbp_diag.reshape(self.num_heads, -1, 4, 4).unsqueeze(0)
+
+            # 取relative_position_bias求取均值
+            # 此处可以优化
+            # rpbp_major1 = relative_position_bias_per.mean(dim=(3, 4))      # the wrong implementation
+            rpbp_major = relative_position_bias_per.contiguous()
+            diagonal_rpbp = torch.diagonal(rpbp_major, dim1=1, dim2=2)
+            diagonal_rpbp.fill_(0)
+            rpbp_major = rpbp_major.permute(0, 1, 3, 2, 4).reshape(self.num_heads, ws * ws, ws * ws).unsqueeze(0)
+
+            # 3、分多个区域切分的attn
+            # 第一层attn
+            attn1
+
+            # 第二层
+            if attn2 is None:
+                attn
+            else:
+                attn2
+                # 第三层
+                attn
+
+            # 4、分别与relative_position_bias和attn相乘的v
+            # 一次置换
+            v = v.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 6, 2, 4, 3, 5).reshape(
+                B, self.num_heads, -1, ws // 2 * ws // 2, 4)
+            # 二次置换
+            if attn2 is not None:
+                # 需要进行转换
+                v = v.view(B, self.num_heads, ws // 4, 2, ws // 4, 2, 4, -1).permute(
+                    0, 1, 2, 4, 3, 5, 6, 7).reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2, 4, -1)
+
+            if attn2 is None:
+                # （1）先变形为基础形式，方便转换和求和
+                v = v.view(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+                # （2）与diag(attn与rpbp_diag)相乘的v
+                v_diag = v.clone().reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2, 4, -1)
+                # （3）与major(rpbp_major)相乘的v
+                v_rpbp_major = v.clone().reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2 * 4, -1)
+                # （4）与attn1相乘的v
+                v_attn1 = torch.sum(v, dim=3, keepdim=False) / 4
+            else:
+                # （1）先变形为基础形式，方便转换和求和
+                v = v.view(B, self.num_heads, ws // 4 * ws // 4, 2 * 2, 4, -1)
+                # （2）与diag(attn与rpbp_diag)相乘的v
+                v_diag = v.clone().reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2, 4, -1)
+                # （3）与major(rpbp_major)相乘的v
+                v_rpbp_major = v.clone().reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2 * 4, -1)
+                # （4）与attn1相乘的v
+                v_attn1 = torch.sum(v, dim=(3, 4), keepdim=False) / (4 * 4)
+                # （5）与attn2相乘的v
+                v_attn2 = torch.sum(v, dim=4, keepdim=False) / 4
+
+            # 5、相乘
+            # （1）
+            attn_rpbp_diag = attn + rpbp_diag
+            attn_rpbp_diag = self.softmax(attn_rpbp_diag)       # 仅能保证每次attention_map在归一化范围内
+
+
+            # wrong:/(ws*ws) 为正则化，相当于每个attn_rpbp_diag元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
+            # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
+            # right:每四个元素加起来，和应为1/(ws/2*ws/2),
+            x_diag = (attn_rpbp_diag @ v_diag) / (ws // 2 * ws // 2)
+            x_diag = x_diag.view(B, self.num_heads, ws * ws, -1)
+
+            # （2）
+            x_rpbp_major = rpbp_major @ v_rpbp_major
+
+            # （3）
+            x_attn1 = attn1 @ v_attn1
+
+            # （4）
+            if attn2 is not None:
+                x_attn2 = attn2 @ v_attn2
+
+            # 求和
+            x = x_diag.contiguous().reshape(B, self.num_heads, L, -1, C // self.num_heads)\
+                + x_rpbp_major.contiguous().reshape(B, self.num_heads, L, -1, C // self.num_heads)\
+                + x_attn1.contiguous().reshape(B, self.num_heads, L, -1, C // self.num_heads)
+            if attn2 is not None:
+                x = x.contiguous().reshape(B, self.num_heads, L, 4, 4, C // self.num_heads)\
+                    + x_attn2.contiguous().reshape(B, self.num_heads, L, 4, 1, C // self.num_heads)
+
+            # 置换回去
+            # 一次置换
+            if attn2 is None:
+                x = x.view(B, self.num_heads, ws // 2, ws // 2, 2, 2, C // self.num_heads).permute(
+                    0, 2, 4, 3, 5, 1, 6).reshape(B, ws * ws, -1)
+            # 两次置换
+            else:
+                x = x.view(B, self.num_heads, ws // 4, ws // 4, 2, 2, 2, 2, C // self.num_heads).permute(
+                    0, 2, 4, 6, 3, 5, 7, 1, 8).reshape(B, ws * ws, -1)
+
+            # 传导
+            if attn2 is None:
+                diagonal_attn2 = torch.diagonal(attn_rpbp_diag, dim1=1, dim2=2)
+                diagonal_attn2.fill_(0)
+                attn2 = attn_rpbp_diag.contiguous()
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn
+        return x, attn1, attn2
 
     @staticmethod
     def double_step_seq(step1, len1, step2, len2):
@@ -346,7 +311,7 @@ class ShiftWindowMSA(BaseModule):
 
         self.drop = build_dropout(dropout_layer)
 
-    def forward(self, query, hw_shape, sim_map=None):
+    def forward(self, query, hw_shape, attn1=None, attn2=None):
         B, L, C = query.shape
         H, W = hw_shape
         assert L == H * W, 'input feature has wrong size'
@@ -368,7 +333,7 @@ class ShiftWindowMSA(BaseModule):
         query_windows = query_windows.view(-1, self.window_size ** 2, C)
 
         # W-MSA/SW-MSA (nW*B, window_size*window_size, C)
-        attn_windows, sim_map = self.w_msa(query_windows, mask=attn_mask, sim_map=sim_map)
+        attn_windows, attn1, attn2 = self.w_msa(query_windows, mask=attn_mask, attn1=attn1, attn2=attn2)
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size,
@@ -385,7 +350,7 @@ class ShiftWindowMSA(BaseModule):
         x = x.view(B, H * W, C)
 
         x = self.drop(x)
-        return x, sim_map
+        return x, attn1, attn2
 
     def window_reverse(self, windows, H, W):
         """

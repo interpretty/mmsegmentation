@@ -14,7 +14,7 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 from einops import rearrange
-from ..backbones.swin_wr_opt_cmp import ShiftWindowMSA
+from ..backbones.swin_wr_opt_cmp_simplify import ShiftWindowMSA
 # from ..backbones.swin_wr_opt import ShiftWindowMSA
 # from ..backbones.swin_wr import ShiftWindowMSA
 from mmengine.analysis import get_model_complexity_info
@@ -86,12 +86,12 @@ class GlobalLocalAttention(nn.Module):
         x = F.pad(x, pad=(0, 1, 0, 1), mode='reflect')
         return x
 
-    def forward(self, x, sim_map=None):
+    def forward(self, x, attn1=None, attn2=None):
         local = self.local2(x) + self.local1(x)
 
         hw_shape = (x.shape[2], x.shape[3])
         attn = x.flatten(2).transpose(1, 2)
-        attn, sim_map = self.attn(attn, hw_shape, sim_map)
+        attn, attn1, attn2 = self.attn(attn, hw_shape, attn1, attn2)
         attn = attn.transpose(1, 2)
         attn = attn.reshape(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
 
@@ -103,7 +103,7 @@ class GlobalLocalAttention(nn.Module):
         out = self.proj(out)
         # print(out.size())
 
-        return out, sim_map
+        return out, attn1, attn2
 
 
 class Block(nn.Module):
@@ -119,12 +119,12 @@ class Block(nn.Module):
                        drop=drop)
         self.norm2 = norm_layer(dim)
 
-    def forward(self, x, sim_map=None):
-        x, sim_map = self.attn(self.norm1(x), sim_map)
+    def forward(self, x, attn1=None, attn2=None):
+        x, attn1, attn2 = self.attn(self.norm1(x), attn1, attn2)
         x = x + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
-        return x, sim_map
+        return x, attn1, attn2
 
 
 class WF(nn.Module):
@@ -214,6 +214,8 @@ class UNetFormerHeadWR(BaseDecodeHead):
 
         self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
 
+        global_windows = window_size
+
         # self.segmentation_head = nn.Sequential(
         #     ConvModule(decode_channels, decode_channels, norm_cfg=dict(type='BN'), act_cfg=dict(type='ReLU')),
         #     nn.Dropout2d(p=dropout, inplace=True),
@@ -227,12 +229,12 @@ class UNetFormerHeadWR(BaseDecodeHead):
         # analysis_results = get_model_complexity_info(self.b2, input_shape=((256, 64, 64), (8, 1024, 1024)))
         # print(analysis_results['out_table'])
 
-        x, sim_map = self.b4(self.pre_conv(inputs[-1]))
+        x, attn1, attn2 = self.b4(self.pre_conv(inputs[-1]))
         x = self.p3(x, inputs[-2])
-        x, sim_map = self.b3(x, sim_map)
+        x, attn1, attn2 = self.b3(x, attn1)
 
         x = self.p2(x, inputs[-3])
-        x, _ = self.b2(x, sim_map)
+        x, _, _ = self.b2(x, attn1, attn2)
 
         x = self.p1(x, inputs[-4])
 

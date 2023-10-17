@@ -7,7 +7,8 @@ from mmcv.cnn.bricks.transformer import build_dropout
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import trunc_normal_
 from mmengine.utils import to_2tuple
-import pandas as pd
+import math
+import resources.swin_global as sw_global
 
 
 class WindowMSA(BaseModule):
@@ -61,8 +62,10 @@ class WindowMSA(BaseModule):
         self.attn_drop = nn.Dropout(attn_drop_rate)
         self.proj = nn.Linear(embed_dims, embed_dims)
         self.proj_drop = nn.Dropout(proj_drop_rate)
-
         self.softmax = nn.Softmax(dim=-1)
+
+        self.global_sim_map = None
+        self.global_attn_v = None
 
     # init_weights的作用
     def init_weights(self):
@@ -101,15 +104,17 @@ class WindowMSA(BaseModule):
 
         # 取relative_position_bias斜对角区域
         # Extract the diagonal blocks
-        diagonal_blocks = relative_position_bias_per.diagonal(dim1=1, dim2=2)
+        diagonal_blocks = relative_position_bias_per.contiguous().diagonal(dim1=1, dim2=2)
         # Reshape the diagonal blocks tensor into the desired shape (N, 4, 4)
         diagonal_blocks = diagonal_blocks.reshape(self.num_heads, -1, 4, 4)
 
         # 取relative_position_bias求取均值
-        # Calculate the average of each block
-        block_averages = relative_position_bias_per.mean(dim=(3, 4))
-        # Reshape the block averages tensor into shape (N, M/4, M/4)
-        block_averages = block_averages.reshape(self.num_heads, ws // 2 * ws // 2, ws // 2 * ws // 2)
+        # 此处可以优化
+        # block_averages1 = relative_position_bias_per.mean(dim=(3, 4))      # the wrong implementation
+        block_averages = relative_position_bias_per.contiguous()
+        diagonal = torch.diagonal(block_averages, dim1=1, dim2=2)
+        diagonal.fill_(0)
+        block_averages = block_averages.permute(0, 1, 3, 2, 4).reshape(self.num_heads, ws * ws, ws * ws)
 
         if sim_map is not None:
             _, _, L, _ = sim_map.shape
@@ -124,85 +129,53 @@ class WindowMSA(BaseModule):
 
             attn = q @ k.transpose(-2, -1)
 
-            # 令attn、sim_map分别与v相乘
-            # 1、sim_map与v相乘
+            # 1、sim_map与v相乘，对应位置编码与v相乘
             # （1）v聚合
-            v_sep = v.clone().view(B, self.num_heads, ws, ws, -1)
-            v_sep = v_sep.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6)
-            v_sep = v_sep.reshape(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+            v_sep = v.clone().view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 6, 2, 4, 3, 5).reshape(
+                B, self.num_heads, -1, ws // 2 * ws // 2, 4)
+            # 统一按照形状(B,H,C,WS,WS)
+            v_sep_sum = torch.sum(v_sep, -1, keepdim=True)
+            v_sep = v_sep.reshape(B, self.num_heads, -1, ws * ws, 1)
 
-            block_v_sep = v_sep[0, 0, 1, :, 0].clone()
+            # （2）sim_map与block_averages分别乘v
+            # 取出global_sim_map的尺寸
+            self.global_sim_map = sw_global.global_sim_map.unsqueeze(2)
+            ws0 = int(math.sqrt(self.global_sim_map.shape[-1]))
 
-            # output v_sep
-            numpy_array4 = v_sep[0, 0, :, :, 0].cpu().detach().numpy()
-            df1 = pd.DataFrame(numpy_array4)
-            df1.to_excel(r'C:\Users\WIN\Desktop\v_sep1.xlsx', index=False)
+            # global_sim_map对角线已经为0
+            attn_sim = (self.global_sim_map @ v_sep_sum) / (ws // ws0 * ws // ws0)
 
-            # v_sep = torch.mean(v_sep, -2, dtype=torch.float64)
-            v_sep = torch.sum(v_sep, -2)
+            # block_averages形状与v_sep保持一致
+            block_averages = block_averages.unsqueeze(1).unsqueeze(0)
+            attn_block_averages = block_averages @ v_sep
+            channel_attn = attn_block_averages.shape[2]
+            attn_block_averages = attn_block_averages.reshape(B, self.num_heads, channel_attn, ws0 * ws0, -1)
 
-            # output v_sep
-            numpy_array4 = v_sep[0, 0, :, 0].cpu().detach().numpy()
-            df1 = pd.DataFrame(numpy_array4)
-            df1.to_excel(r'C:\Users\WIN\Desktop\v_sep4.xlsx', index=False)
+            attn_sim = attn_sim + attn_block_averages
 
-            # v_sep = v_sep.float()
-
-            # # output v_sep
-            # numpy_array4 = v_sep[0,0,:,0].cpu().detach().numpy()
-            # df1 = pd.DataFrame(numpy_array4)
-            # df1.to_excel(r'C:\Users\WIN\Desktop\v_sep5.xlsx', index=False)
-
-            # （2）sim_map加入位置因素
-            attn_sim = sim_map.contiguous()
-            # attn_sim = sim_map + block_averages.unsqueeze(0)
-
-            # 令attn_sim对角线为0
-            attn_sim = attn_sim.reshape(B, self.num_heads, ws // 2 * ws // 2, ws // 2 * ws // 2).clone()
-            diagonal = torch.diagonal(attn_sim, dim1=-2, dim2=-1)
-            diagonal.fill_(0)
-            attn_sim = attn_sim.reshape(B, self.num_heads, ws // 2 * ws // 2, ws // 2 * ws // 2)
-
-            block_attn_sim = attn_sim[0, 0, 0, 1].clone()
-
-            # 统计attn_sim的总和
-            sum_attn_sim = attn_sim.sum(dim=(-2, -1))
-            sum_attn_sim_1 = attn_sim.sum(dim=-1)
-
-            # # output attn_sim
-            # numpy_array1 = attn_sim[0,0,:,:].cpu().detach().numpy()
-            # df1 = pd.DataFrame(numpy_array1)
-            # df1.to_excel(r'C:\Users\WIN\Desktop\attn_sim.xlsx', index=False)
-
-            # 取样
-            # attn_sim_sample = attn_sim.contiguous()
-            # attn_sim_sample = attn_sim_sample[0,0,0,:]
-            # v_sep_sample = v_sep.contiguous()
-            # v_sep_sample = v_sep_sample[0,0,:,:]
-            # # 导出
-            # numpy_array5 = attn_sim_sample.cpu().detach().numpy()
-            # df5 = pd.DataFrame(numpy_array5)
-            # df5.to_excel(r'C:\Users\WIN\Desktop\attn_sim_sample.xlsx', index=False)
-            # numpy_array6 = v_sep_sample.cpu().detach().numpy()
-            # df6 = pd.DataFrame(numpy_array6)
-            # df6.to_excel(r'C:\Users\WIN\Desktop\v_sep_sample.xlsx', index=False)
-
-            attn_sim = (attn_sim @ v_sep) / 4
+            if self.global_attn_v is not None:
+                # 第三层，将对角线置为零
+                self.global_attn_v
 
             # 2、attn与v相乘
             # （1）v进行permute
-            v_diag = v.clone().view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6)
-            v_diag = v_diag.reshape(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
-            #
-            # # 可删
-            v_sample = v_diag.contiguous().reshape(B, self.num_heads, L * 4, -1)
+            v_diag = v.clone().view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
+                B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+
+
+            # #
+            # # # 可删
+            # v_sample = v_diag.contiguous().reshape(B, self.num_heads, L * 4, -1)
 
             # （2）attn加入位置因素
-            # attn_v = attn + diagonal_blocks.unsqueeze(0)
-            attn_v = attn.contiguous()
+            # attn_v = attn.contiguous()
+            attn_v = attn.contiguous() + diagonal_blocks.unsqueeze(0)
 
             # attn_v的正则化
-            attn_v = self.softmax(attn_v)
+            attn_v = self.softmax(attn_v)       # 仅能保证每次attention_map在归一化范围内
+
+            # 存储attn_v。归一化之后，在乘v之前
+            sw_global.global_attn_v = attn_v.contiguous()
 
             # 统计attn_v的总和
             sum_attn_v = attn_v.sum(dim=(-2, -1))
@@ -210,58 +183,43 @@ class WindowMSA(BaseModule):
             # # output attn_v
             # numpy_array2 = attn_v[0,0].reshape(ws//2*ws//2,4*4).cpu().detach().numpy()
             # df2 = pd.DataFrame(numpy_array2)
-            # df2.to_excel(r'C:\Users\WIN\Desktop\attn_v.xlsx', index=False)
-
-            # # 采样
-            # v_diag_sample = v_diag.contiguous()
-            # v_diag_sample = v_diag_sample[0,0,0,:,:]
-            # attn_v_sample = attn_v.contiguous()
-            # attn_v_sample = attn_v_sample[0,0,0,:,:]
-            # # 导出
-            # numpy_array5 = v_diag_sample.cpu().detach().numpy()
-            # df5 = pd.DataFrame(numpy_array5)
-            # df5.to_excel(r'C:\Users\WIN\Desktop\v_diag_sample.xlsx', index=False)
-            # numpy_array6 = attn_v_sample.cpu().detach().numpy()
-            # df6 = pd.DataFrame(numpy_array6)
-            # df6.to_excel(r'C:\Users\WIN\Desktop\attn_v_sample.xlsx', index=False)
-
-            # /(ws*ws) 为正则化，相当于每个attn_v元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
+            # df2.to_excel(r'C:\Users\WIN\Desktop\attn_v.xlsx', index=False) 为正则化，相当于每个attn_v元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
             # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
-            attn_v = (attn_v @ v_diag)/(ws*ws)
+            # right:每四个元素加起来，和应为1/(ws/2*ws/2),
+            attn_v = (attn_v @ v_diag) / (ws // 2 * ws // 2)
 
             # 3、合并attn_sim与attn_v
 
             # 扩张attn_sim
             # 不扩张，直接相加
-            attn_sim = attn_sim.permute(0, 1, 3, 2)  # B, self.num_heads, features, ws // 2 * ws // 2
-            attn_v = attn_v.permute(0, 1, 4, 2, 3)  # B, self.num_heads, features, ws // 2 * ws // 2, 4
-            attn_merge = attn_sim.unsqueeze(-1) + attn_v
-            attn_merge = attn_merge.permute(0, 1, 3, 4, 2)
-            attn_merge = attn_merge.reshape(B, self.num_heads, ws // 2, ws // 2, 2, 2, -1).permute(0, 2, 4, 3, 5, 1, 6)
-            attn_merge = attn_merge.reshape(B, ws * ws, -1)
+            # B, self.num_heads, features, ws // 2 * ws // 2, 1
+            # attn_sim = attn_sim.permute(0, 1, 3, 2)
+            # B, self.num_heads, features, ws // 2 * ws // 2, 4
+            attn_v = attn_v.permute(0, 1, 4, 2, 3)
+            attn_merge = attn_sim + attn_v
+            attn_merge = attn_merge.reshape(B, self.num_heads, -1, ws // 2, ws // 2, 2, 2).permute(0, 3, 5, 4, 6, 1, 2)
+            # 何处加入attn_drop？
+            x = attn_merge.reshape(B, ws * ws, -1)
 
             # sim_map扩建，通过expand函数实现
-            sim_map = sim_map.unsqueeze(-1).unsqueeze(-1)
-            sim_map = sim_map.expand(-1, -1, -1, -1, 4, 4) / 4
-
-            # sim_map填充
-            # Get the shapes of sim_map1 and attn1
-            s1, s2, s3, _, s4, s5 = sim_map.shape
-            # Reshape sim_map1 and attn1 to match the required dimensions
-            sim_map = sim_map.view(s1 * s2 * s3 * s3, s4 * s5).clone()
-            attn = attn.view(s1 * s2 * s3, s4 * s5)
-            # Create indices for indexing into sim_map1
-            indices_0 = torch.arange(0, s3 * s3, s3 + 1).cuda()
-            indices_1 = torch.cat([indices_0 + i * s3 * s3 for i in range(s1 * s2)]).cuda()
-            # Use index_copy_ to update sim_map1 with attn1 values
-            sim_map.index_copy_(0, indices_1, attn)
-            # Reshape sim_map1 back to its original shape
-            sim_map = sim_map.view(s1, s2, s3, s3, s4, s5)
-
-            attn = []
-            # attn: B, self.num_heads, ws//2*ws//2, ws//2*ws//2, 2*2, 2*2
-            attn = sim_map.permute(0, 1, 2, 4, 3, 5)
-            attn = attn.reshape(B, self.num_heads, ws // 2, ws // 2, 2, 2, ws // 2, ws // 2, 2, 2)
+            # sim_map = sim_map.unsqueeze(-1).unsqueeze(-1)
+            # sim_map = sim_map.expand(-1, -1, -1, -1, 4, 4) / 4
+            # # sim_map填充
+            # # Get the shapes of sim_map1 and attn1
+            # s1, s2, s3, _, s4, s5 = sim_map.shape
+            # # Reshape sim_map1 and attn1 to match the required dimensions
+            # sim_map = sim_map.view(s1 * s2 * s3 * s3, s4 * s5).clone()
+            # attn = attn.view(s1 * s2 * s3, s4 * s5)
+            # # Create indices for indexing into sim_map1
+            # indices_0 = torch.arange(0, s3 * s3, s3 + 1).cuda()
+            # indices_1 = torch.cat([indices_0 + i * s3 * s3 for i in range(s1 * s2)]).cuda()
+            # # Use index_copy_ to update sim_map1 with attn1 values
+            # sim_map.index_copy_(0, indices_1, attn)
+            # # Reshape sim_map1 back to its original shape
+            # sim_map = sim_map.view(s1, s2, s3, s3, s4, s5)
+            # # attn: B, self.num_heads, ws//2*ws//2, ws//2*ws//2, 2*2, 2*2
+            # attn = sim_map.permute(0, 1, 2, 4, 3, 5)
+            # attn = attn.reshape(B, self.num_heads, ws // 2, ws // 2, 2, 2, ws // 2, ws // 2, 2, 2)
 
             # # # output attn
             # # numpy_array3 = attn[0,0].reshape(ws//2*ws//2*4,ws//2*ws//2*4).cpu().detach().numpy()
@@ -281,37 +239,44 @@ class WindowMSA(BaseModule):
             # df6 = pd.DataFrame(numpy_array6)
             # df6.to_excel(r'C:\Users\WIN\Desktop\v_sample.xlsx', index=False)
 
-            block_attn_sample = attn.contiguous().reshape(B, self.num_heads, L * 4, L * 4)[0, 0, 0, 4:8]
-            block_v_sample = v_sample[0, 0, 4:8, 0]
+            # block_attn_sample = attn.contiguous().reshape(B, self.num_heads, L * 4, L * 4)[0, 0, 0, 4:8]
+            # block_v_sample = v_sample[0, 0, 4:8, 0]
+            # block_sep = block_attn_sim * (torch.sum(block_v_sep))
+            # block_attn = block_attn_sample @ block_v_sample
+            # are_equal = torch.equal(block_sep, block_attn)
+            # print(are_equal)
 
-            block_sep = block_attn_sim * (torch.sum(block_v_sep))
-            block_attn = block_attn_sample @ block_v_sample
-
-            are_equal = torch.equal(block_sep, block_attn)
-            print(are_equal)
-
-            attn = attn.permute(0, 1, 2, 4, 3, 5, 6, 8, 7, 9)  #
-            attn = attn.reshape(B, self.num_heads, L * 4, L * 4)  # B,num_heads,ws*ws,ws*ws
+            # attn = attn.permute(0, 1, 2, 4, 3, 5, 6, 8, 7, 9)  #
+            # attn = attn.reshape(B, self.num_heads, L * 4, L * 4)  # B,num_heads,ws*ws,ws*ws
+            # attn = attn + relative_position_bias.unsqueeze(0)
+            # attn = self.softmax(attn)
+            # attn_merge = (attn @ v).transpose(1, 2).reshape(B, N, C)
+            # # # 判断attn_merge和是否一致
+            # are_equal = torch.equal(attn_merge, x)
+            # print(are_equal)
 
             # attn = attn + relative_position_bias.unsqueeze(0)
             # attn: B, self.num_heads, L * 4, L * 4
             # v:
-            x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+            # x = (attn @ v).transpose(1, 2).reshape(B, N, C)
 
-            # 判断attn_merge和是否一致
-            are_equal = torch.equal(attn_merge, x)
-            print(are_equal)
-
+            # # 判断attn_merge和是否一致
+            # are_equal = torch.equal(attn_merge, x)
+            # print(are_equal)
 
         else:
             attn = (q @ k.transpose(-2, -1))
+            attn = attn + relative_position_bias.unsqueeze(0)
 
-        attn = attn + relative_position_bias.unsqueeze(0)
+            attn = self.softmax(attn)
+            attn = self.attn_drop(attn)
+            x = (attn @ v).transpose(1, 2).reshape(B, N, C)
 
-        attn = self.softmax(attn)
-        attn = self.attn_drop(attn)
+            # global_sim_map对角线置为0
+            sw_global.global_sim_map = attn.contiguous()
+            diagonal = torch.diagonal(sw_global.global_sim_map, dim1=-2, dim2=-1)
+            diagonal.fill_(0)
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x, attn
