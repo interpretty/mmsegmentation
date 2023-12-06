@@ -7,7 +7,9 @@ from mmcv.cnn.bricks.transformer import build_dropout
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import trunc_normal_
 from mmengine.utils import to_2tuple
-import math
+import os
+
+save_path = r'C:\PY\mmsegmentation\checkpoints\vaihingen\unetformerwr\20231102_012650\save'
 
 
 class WindowMSA(BaseModule):
@@ -112,6 +114,10 @@ class WindowMSA(BaseModule):
             # 1、求对角区域的attn
             # 以2为最小置换尺寸对q、k进行置换
             # 一次置换
+
+            # # 保存q
+            # torch.save(q, os.path.join(save_path, 'q2.pt'))
+
             q = q.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
                 B, self.num_heads, ws // 2 * ws // 2, 4, -1)
             k = k.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
@@ -234,6 +240,10 @@ class WindowMSA(BaseModule):
             else:
                 x = x.view(B, self.num_heads, ws // 4, ws // 4, 2, 2, 2, 2, C // self.num_heads).permute(
                     0, 2, 4, 6, 3, 5, 7, 1, 8).reshape(B, ws * ws, -1)
+                # 保存x
+                torch.save(q, os.path.join(save_path, 'x1.pt'))
+                # # 保存x
+                # torch.save(q, os.path.join(save_path, 'x2.pt'))
 
             # 传导
             if attn2 is None:

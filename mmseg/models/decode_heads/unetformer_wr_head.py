@@ -13,7 +13,7 @@ from ..utils import UpConvBlock, Upsample
 from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
-from einops import rearrange
+import os
 from ..backbones.swin_wr_opt_cmp_simplify import ShiftWindowMSA
 # from ..backbones.swin_wr_opt import ShiftWindowMSA
 # from ..backbones.swin_wr import ShiftWindowMSA
@@ -228,6 +228,11 @@ class UNetFormerHeadWR(BaseDecodeHead):
         # print(analysis_results['out_table'])
         # analysis_results = get_model_complexity_info(self.b2, input_shape=((256, 64, 64), (8, 1024, 1024)))
         # print(analysis_results['out_table'])
+
+        # save_path = r'C:\PY\mmsegmentation\checkpoints\vaihingen\unetformerwr\20231102_012650\save'
+        # # 保存inputs[0]
+        # torch.save(inputs, os.path.join(save_path, 'input1.pt'))
+        # torch.save(inputs, os.path.join(save_path, 'input3.pt'))
 
         x, attn1, attn2 = self.b4(self.pre_conv(inputs[-1]))
         x = self.p3(x, inputs[-2])
