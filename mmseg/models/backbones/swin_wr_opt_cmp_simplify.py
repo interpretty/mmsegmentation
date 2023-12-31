@@ -101,10 +101,14 @@ class WindowMSA(BaseModule):
             attn = self.attn_drop(attn)
             x = (attn @ v).transpose(1, 2).reshape(B, N, C)
 
-            # attn对角线置为0
-            attn1 = attn.clone()
-            diagonal_attn1 = torch.diagonal(attn1, dim1=-2, dim2=-1)
-            diagonal_attn1.fill_(0)
+            # 利用掩膜点乘实现attn对角线置零
+            mask_side = self.window_size[0] * self.window_size[1]
+            # 生成一个全为1的二维Tensor
+            mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
+            indices = torch.arange(mask_side)
+            mask_diag[indices, indices] = 0
+            # 点乘置零
+            attn1 = attn * mask_diag
 
         else:
             _, _, L, _ = attn1.shape
@@ -199,7 +203,7 @@ class WindowMSA(BaseModule):
             # 5、相乘
             # （1）
             attn_rpbp_diag = attn + rpbp_diag
-            attn_rpbp_diag = self.softmax(attn_rpbp_diag)       # 仅能保证每次attention_map在归一化范围内
+            attn_rpbp_diag = self.softmax(attn_rpbp_diag)  # 仅能保证每次attention_map在归一化范围内
 
             # wrong:/(ws*ws) 为正则化，相当于每个attn_rpbp_diag元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
             # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
@@ -218,11 +222,11 @@ class WindowMSA(BaseModule):
                 x_attn2 = attn2 @ v_attn2
 
             # 求和
-            x = x_diag.reshape(B, self.num_heads, L, -1, C // self.num_heads)\
-                + x_rpbp_major.reshape(B, self.num_heads, L, -1, C // self.num_heads)\
+            x = x_diag.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
+                + x_rpbp_major.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
                 + x_attn1.reshape(B, self.num_heads, L, -1, C // self.num_heads)
             if attn2 is not None:
-                x = x.reshape(B, self.num_heads, L, 4, 4, C // self.num_heads)\
+                x = x.reshape(B, self.num_heads, L, 4, 4, C // self.num_heads) \
                     + x_attn2.reshape(B, self.num_heads, L, 4, 1, C // self.num_heads)
 
             # 置换回去
@@ -237,9 +241,14 @@ class WindowMSA(BaseModule):
 
             # 传导
             if attn2 is None:
-                attn2 = attn_rpbp_diag.clone()
-                diagonal_attn2 = torch.diagonal(attn2, dim1=-2, dim2=-1)
-                diagonal_attn2.fill_(0)
+                # 利用掩膜点乘实现attn2对角线置零
+                mask_side = 2 * 2
+                # 生成一个全为1的二维Tensor
+                mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
+                indices = torch.arange(mask_side)
+                mask_diag[indices, indices] = 0
+                # 点乘置零
+                attn2 = attn_rpbp_diag * mask_diag
 
         x = self.proj(x)
         x = self.proj_drop(x)

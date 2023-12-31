@@ -14,7 +14,8 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 import os
-from ..backbones.swin_wr_opt_cmp_simplify import ShiftWindowMSA
+from ..backbones.swin_wr_opt_cmp_simplify_verify import ShiftWindowMSA
+# from ..backbones.swin_wr_opt_cmp_simplify import ShiftWindowMSA
 # from ..backbones.swin_wr_opt import ShiftWindowMSA
 # from ..backbones.swin_wr import ShiftWindowMSA
 from mmengine.analysis import get_model_complexity_info

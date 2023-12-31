@@ -186,8 +186,8 @@ class FeatureRefinementHead(nn.Module):
 @MODELS.register_module()
 class UNetFormerHeadMM(BaseDecodeHead):
     def __init__(self,
-                 encoder_channels=(256, 512, 1024, 2048),
-                 decode_channels=256,
+                 encoder_channels=(64, 128, 256, 512),
+                 decode_channels=64,
                  dropout=0.1,
                  window_size=8,
                  **kwargs):
