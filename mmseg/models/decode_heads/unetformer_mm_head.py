@@ -186,8 +186,10 @@ class FeatureRefinementHead(nn.Module):
 @MODELS.register_module()
 class UNetFormerHeadMM(BaseDecodeHead):
     def __init__(self,
-                 encoder_channels=(64, 128, 256, 512),
-                 decode_channels=64,
+                 # encoder_channels=(64, 128, 256, 512),
+                 # decode_channels=64,
+                 encoder_channels=(256, 512, 1024, 2048),
+                 decode_channels=256,
                  dropout=0.1,
                  window_size=8,
                  **kwargs):
@@ -215,14 +217,18 @@ class UNetFormerHeadMM(BaseDecodeHead):
 
     def forward(self, inputs):
         x = self.b4(self.pre_conv(inputs[-1]))
+        h4 = x
+
         x = self.p3(x, inputs[-2])
         x = self.b3(x)
+        h3 = x
 
         x = self.p2(x, inputs[-3])
         x = self.b2(x)
+        h2 = x
 
         x = self.p1(x, inputs[-4])
 
         # x = self.segmentation_head(x)
         x = self.cls_seg(x)
-        return x
+        return (x, h4, h3, h2)

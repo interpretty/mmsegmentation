@@ -226,7 +226,10 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
             ]
             inputs = torch.cat(upsampled_inputs, dim=1)
         elif self.input_transform == 'multiple_select':
-            inputs = [inputs[i] for i in self.in_index]
+            if isinstance(self.in_index, (list, tuple)):
+                inputs = [inputs[i] for i in self.in_index]
+            else:
+                inputs = [inputs[i] for i in range(self.in_index)]
         else:
             inputs = inputs[self.in_index]
 
@@ -259,8 +262,12 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
             dict[str, Tensor]: a dictionary of loss components
         """
         seg_logits = self.forward(inputs)
-        losses = self.loss_by_feat(seg_logits, batch_data_samples)
-        return losses
+        if isinstance(seg_logits, (tuple, list)):
+            losses = self.loss_by_feat(seg_logits[0], batch_data_samples)
+            return (losses, seg_logits[1:])
+        else:
+            losses = self.loss_by_feat(seg_logits, batch_data_samples)
+            return losses
 
     def predict(self, inputs: Tuple[Tensor], batch_img_metas: List[dict],
                 test_cfg: ConfigType) -> Tensor:
@@ -280,7 +287,10 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """
         seg_logits = self.forward(inputs)
 
-        return self.predict_by_feat(seg_logits, batch_img_metas)
+        if isinstance(seg_logits, (tuple, list)):
+            return self.predict_by_feat(seg_logits[0], batch_img_metas)
+        else:
+            return self.predict_by_feat(seg_logits, batch_img_metas)
 
     def _stack_batch_gt(self, batch_data_samples: SampleList) -> Tensor:
         gt_semantic_segs = [

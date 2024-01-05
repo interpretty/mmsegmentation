@@ -39,6 +39,8 @@ from .unet_attn_head import UNetAttnHead
 from .unetformer_head import UNetFormerHead
 from .unetformer_mm_head import UNetFormerHeadMM
 from .unetformer_wr_head import UNetFormerHeadWR
+from .unetformer_wr_head import UNetFormerHeadWR
+from .unetformer_aux_head import UNetFormerAuxHead
 
 __all__ = [
     'FCNHead', 'PSPHead', 'ASPPHead', 'PSAHead', 'NLHead', 'GCHead', 'CCHead',
@@ -49,6 +51,5 @@ __all__ = [
     'SegformerHead', 'ISAHead', 'STDCHead', 'IterativeDecodeHead',
     'KernelUpdateHead', 'KernelUpdator', 'MaskFormerHead', 'Mask2FormerHead',
     'LightHamHead', 'PIDHead', 'DDRHead', 'UNetHead', 'AttnUNetHead', 'UNetAttnHead',
-    'UNetFormerHead', 'UNetFormerHeadMM', 'UNetFormerHeadWR'
-
+    'UNetFormerHead', 'UNetFormerHeadMM', 'UNetFormerHeadWR', 'UNetFormerAuxHead'
 ]

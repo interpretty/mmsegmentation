@@ -236,14 +236,18 @@ class UNetFormerHeadWR(BaseDecodeHead):
         # torch.save(inputs, os.path.join(save_path, 'input3.pt'))
 
         x, attn1, attn2 = self.b4(self.pre_conv(inputs[-1]))
+        h4 = x
+
         x = self.p3(x, inputs[-2])
         x, attn1, attn2 = self.b3(x, attn1)
+        h3 = x
 
         x = self.p2(x, inputs[-3])
         x, _, _ = self.b2(x, attn1, attn2)
+        h2 = x
 
         x = self.p1(x, inputs[-4])
 
         # x = self.segmentation_head(x)
         x = self.cls_seg(x)
-        return x
+        return (x, h4, h3, h2)

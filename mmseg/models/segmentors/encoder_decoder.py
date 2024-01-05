@@ -136,9 +136,12 @@ class EncoderDecoder(BaseSegmentor):
         losses = dict()
         loss_decode = self.decode_head.loss(inputs, data_samples,
                                             self.train_cfg)
-
-        losses.update(add_prefix(loss_decode, 'decode'))
-        return losses
+        if isinstance(loss_decode, tuple):
+            losses.update(add_prefix(loss_decode[0], 'decode'))
+            return (losses, loss_decode[1:])
+        else:
+            losses.update(add_prefix(loss_decode, 'decode'))
+            return losses
 
     def _auxiliary_head_forward_train(self, inputs: List[Tensor],
                                       data_samples: SampleList) -> dict:
@@ -174,13 +177,23 @@ class EncoderDecoder(BaseSegmentor):
         losses = dict()
 
         loss_decode = self._decode_head_forward_train(x, data_samples)
-        losses.update(loss_decode)
+        if isinstance(loss_decode, tuple):
+            losses.update(loss_decode[0])
 
-        if self.with_auxiliary_head:
-            loss_aux = self._auxiliary_head_forward_train(x, data_samples)
-            losses.update(loss_aux)
+            if self.with_auxiliary_head:
+                loss_aux = self._auxiliary_head_forward_train(loss_decode[1][0], data_samples)
+                losses.update(loss_aux)
 
-        return losses
+            return losses
+
+        else:
+            losses.update(loss_decode)
+
+            if self.with_auxiliary_head:
+                loss_aux = self._auxiliary_head_forward_train(x, data_samples)
+                losses.update(loss_aux)
+
+            return losses
 
     def predict(self,
                 inputs: Tensor,
