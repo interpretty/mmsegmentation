@@ -229,6 +229,10 @@ class UNetFormerHeadMM(BaseDecodeHead):
 
         x = self.p1(x, inputs[-4])
 
+        # 实现原始图片信息的传入
+        # 实现最终结果为512*512大小
+        # 把feature_refinement里的内容往后调整
+
         # x = self.segmentation_head(x)
         x = self.cls_seg(x)
         return (x, h4, h3, h2)
