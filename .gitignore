@@ -119,3 +119,7 @@ mmseg/.mim
 # Pytorch
 *.pth
 *.json
+
+# checkpoints files and dirs
+**/checkpoints/**
+C:\PY\mmsegmentation\checkpoints\vaihingen\unetformer\unetformer_r50-d8-20k-vaihingen-512×512.py
