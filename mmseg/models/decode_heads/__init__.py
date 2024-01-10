@@ -25,6 +25,7 @@ from .pid_head import PIDHead
 from .point_head import PointHead
 from .psa_head import PSAHead
 from .psp_head import PSPHead
+from .san_head import SideAdapterCLIPHead
 from .segformer_head import SegformerHead
 from .segmenter_mask_head import SegmenterMaskTransformerHead
 from .sep_aspp_head import DepthwiseSeparableASPPHead
@@ -33,6 +34,7 @@ from .setr_mla_head import SETRMLAHead
 from .setr_up_head import SETRUPHead
 from .stdc_head import STDCHead
 from .uper_head import UPerHead
+from .vpd_depth_head import VPDDepthHead
 from .unet_head import UNetHead
 from .attn_unet_head import AttnUNetHead
 from .unet_attn_head import UNetAttnHead
@@ -50,6 +52,7 @@ __all__ = [
     'SETRMLAHead', 'DPTHead', 'SETRMLAHead', 'SegmenterMaskTransformerHead',
     'SegformerHead', 'ISAHead', 'STDCHead', 'IterativeDecodeHead',
     'KernelUpdateHead', 'KernelUpdator', 'MaskFormerHead', 'Mask2FormerHead',
-    'LightHamHead', 'PIDHead', 'DDRHead', 'UNetHead', 'AttnUNetHead', 'UNetAttnHead',
-    'UNetFormerHead', 'UNetFormerHeadMM', 'UNetFormerHeadWR', 'UNetFormerAuxHead'
+    'LightHamHead', 'PIDHead', 'DDRHead', 'VPDDepthHead', 'SideAdapterCLIPHead',
+    'UNetHead', 'AttnUNetHead', 'UNetAttnHead', 'UNetFormerHead', 'UNetFormerHeadMM',
+    'UNetFormerHeadWR', 'UNetFormerAuxHead'
 ]
