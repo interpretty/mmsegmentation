@@ -176,6 +176,12 @@ class EncoderDecoder(BaseSegmentor):
 
         losses = dict()
 
+        # 将原图传入decode_head
+        # flag_inputs_trans = True
+        flag_inputs_trans = False
+        if flag_inputs_trans is True:
+            x = (x, inputs)
+
         loss_decode = self._decode_head_forward_train(x, data_samples)
         if isinstance(loss_decode, tuple):
             losses.update(loss_decode[0])

@@ -65,7 +65,7 @@ class GlobalLocalAttention(nn.Module):
             window_size=window_size,
             shift_size=0,
             qkv_bias=qkv_bias,
-            qk_scale=head_embed_dims**-0.5,
+            qk_scale=head_embed_dims ** -0.5,
             attn_drop_rate=0.,
             proj_drop_rate=0.,
             dropout_layer=dict(type='DropPath', drop_prob=0.),
@@ -124,17 +124,18 @@ class Block(nn.Module):
 
 
 class WF(nn.Module):
-    def __init__(self, in_channels=128, decode_channels=128, eps=1e-8):
+    def __init__(self, in_channels=128, decode_channels=128, scale_factor=2, eps=1e-8):
         super(WF, self).__init__()
-
+        self.scale_factor = scale_factor
         self.pre_conv = ConvModule(in_channels, decode_channels, kernel_size=1, norm_cfg=None, act_cfg=None)
         self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.eps = eps
-        self.post_conv = ConvModule(decode_channels, decode_channels, kernel_size=3, padding=1, norm_cfg=dict(type='BN'),
+        self.post_conv = ConvModule(decode_channels, decode_channels, kernel_size=3, padding=1,
+                                    norm_cfg=dict(type='BN'),
                                     act_cfg=dict(type='ReLU'))
 
     def forward(self, x, res):
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        x = F.interpolate(x, scale_factor=self.scale_factor, mode='bilinear', align_corners=False)
         weights = nn.ReLU()(self.weights)
         fuse_weights = weights / (torch.sum(weights, dim=0) + self.eps)
         x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
@@ -142,16 +143,10 @@ class WF(nn.Module):
         return x
 
 
+# 和WF一起用的FeatureRefinementHead实现
 class FeatureRefinementHead(nn.Module):
     def __init__(self, in_channels=64, decode_channels=64):
         super().__init__()
-        self.pre_conv = ConvModule(in_channels, decode_channels, kernel_size=1, norm_cfg=None, act_cfg=None)
-
-        self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.eps = 1e-8
-        self.post_conv = ConvModule(decode_channels, decode_channels, kernel_size=3, padding=1, norm_cfg=dict(type='BN'),
-                                    act_cfg=dict(type='ReLU'))
-
         self.pa = nn.Sequential(
             nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
             nn.Sigmoid())
@@ -167,20 +162,56 @@ class FeatureRefinementHead(nn.Module):
         self.proj = SeparableConvBN(decode_channels, decode_channels, kernel_size=3)
         self.act = nn.ReLU6()
 
-    def forward(self, x, res):
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
-        weights = nn.ReLU()(self.weights)
-        fuse_weights = weights / (torch.sum(weights, dim=0) + self.eps)
-        x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
-        x = self.post_conv(x)
+    def forward(self, x):
         shortcut = self.shortcut(x)
         pa = self.pa(x) * x
         ca = self.ca(x) * x
         x = pa + ca
         x = self.proj(x) + shortcut
         x = self.act(x)
-
         return x
+
+
+# # FeatureRefinementHead原始实现
+# class FeatureRefinementHead(nn.Module):
+#     def __init__(self, in_channels=64, decode_channels=64):
+#         super().__init__()
+#         self.pre_conv = ConvModule(in_channels, decode_channels, kernel_size=1, norm_cfg=None, act_cfg=None)
+#
+#         self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+#         self.eps = 1e-8
+#         self.post_conv = ConvModule(decode_channels, decode_channels, kernel_size=3, padding=1, norm_cfg=dict(type='BN'),
+#                                     act_cfg=dict(type='ReLU'))
+#
+#         self.pa = nn.Sequential(
+#             nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
+#             nn.Sigmoid())
+#         self.ca = nn.Sequential(nn.AdaptiveAvgPool2d(1),
+#                                 ConvModule(decode_channels, decode_channels // 16, kernel_size=1, norm_cfg=None,
+#                                            act_cfg=None),
+#                                 nn.ReLU6(),
+#                                 ConvModule(decode_channels // 16, decode_channels, kernel_size=1, norm_cfg=None,
+#                                            act_cfg=None),
+#                                 nn.Sigmoid())
+#
+#         self.shortcut = ConvModule(decode_channels, decode_channels, kernel_size=1, norm_cfg=dict(type='BN'))
+#         self.proj = SeparableConvBN(decode_channels, decode_channels, kernel_size=3)
+#         self.act = nn.ReLU6()
+#
+#     def forward(self, x, res):
+#         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+#         weights = nn.ReLU()(self.weights)
+#         fuse_weights = weights / (torch.sum(weights, dim=0) + self.eps)
+#         x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
+#         x = self.post_conv(x)
+#         shortcut = self.shortcut(x)
+#         pa = self.pa(x) * x
+#         ca = self.ca(x) * x
+#         x = pa + ca
+#         x = self.proj(x) + shortcut
+#         x = self.act(x)
+#
+#         return x
 
 
 @MODELS.register_module()
@@ -208,7 +239,12 @@ class UNetFormerHeadMM(BaseDecodeHead):
         self.b2 = Block(dim=decode_channels, num_heads=8, window_size=64)
         self.p2 = WF(encoder_channels[-3], decode_channels)
 
-        self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
+        # self.b1 = Block(dim=decode_channels, num_heads=8, window_size=16)  # 暂时定为16
+        self.p1 = WF(encoder_channels[-4], decode_channels)
+
+        # for ori_img
+        self.p0 = WF(in_channels=3, decode_channels=decode_channels, scale_factor=4)
+        self.fr = FeatureRefinementHead(decode_channels, decode_channels)
 
         # self.segmentation_head = nn.Sequential(
         #     ConvModule(decode_channels, decode_channels, norm_cfg=dict(type='BN'), act_cfg=dict(type='ReLU')),
@@ -216,6 +252,13 @@ class UNetFormerHeadMM(BaseDecodeHead):
         #     ConvModule(decode_channels, self.num_classes, kernel_size=1))
 
     def forward(self, inputs):
+        # 实现原始图片信息传入的判断
+        if len(inputs) == 2:
+            ori_img = inputs[1]
+            inputs = inputs[0]
+        else:
+            ori_img = None
+
         x = self.b4(self.pre_conv(inputs[-1]))
         h4 = x
 
@@ -229,10 +272,17 @@ class UNetFormerHeadMM(BaseDecodeHead):
 
         x = self.p1(x, inputs[-4])
 
-        # 实现原始图片信息的传入
-        # 实现最终结果为512*512大小
-        # 把feature_refinement里的内容往后调整
+        if ori_img is not None:
+            # 实现原始图片信息的传入
+
+            # 实现最终结果为512*512大小
+            # x = self.b1(x)
+
+            # 将ori_img进行卷积
+            x = self.p0(x, ori_img)
+            # 把feature_refinement里的内容往后调整
 
         # x = self.segmentation_head(x)
+        x = self.fr(x)
         x = self.cls_seg(x)
         return (x, h4, h3, h2)
