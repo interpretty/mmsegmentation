@@ -185,14 +185,24 @@ class EncoderDecoder(BaseSegmentor):
             x = (x, inputs)
 
         loss_decode = self._decode_head_forward_train(x, data_samples)
-        if isinstance(loss_decode, tuple):
-            losses.update(loss_decode[0])
 
-            if self.with_auxiliary_head:
-                loss_aux = self._auxiliary_head_forward_train(loss_decode[1][0], data_samples)
-                losses.update(loss_aux)
+        if 'UNetFormer' in type(self.decode_head).__name__:
+            if type(self.auxiliary_head).__name__ == 'UNetFormerAuxHead':
+                losses.update(loss_decode[0])
 
-            return losses
+                if self.with_auxiliary_head:
+                    loss_aux = self._auxiliary_head_forward_train(loss_decode[1][0], data_samples)
+                    losses.update(loss_aux)
+
+                return losses
+            else:
+                losses.update(loss_decode[0])
+
+                if self.with_auxiliary_head:
+                    loss_aux = self._auxiliary_head_forward_train(x, data_samples)
+                    losses.update(loss_aux)
+
+                return losses
 
         else:
             losses.update(loss_decode)

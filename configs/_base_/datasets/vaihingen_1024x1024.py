@@ -1,13 +1,13 @@
 # dataset settings
 dataset_type = 'ISPRSDataset'
 data_root = 'C:/py/mmsegmentation/data/vaihingen'
-crop_size = (512, 512)
+crop_size = (1024, 1024)
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', reduce_zero_label=True),
     dict(
         type='RandomResize',
-        scale=(512, 512),
+        scale=(1024, 1024),
         ratio_range=(0.5, 2.0),
         keep_ratio=True),
     dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
@@ -17,7 +17,7 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(512, 512), keep_ratio=True),
+    dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations', reduce_zero_label=True),
@@ -40,7 +40,7 @@ tta_pipeline = [
         ])
 ]
 train_dataloader = dict(
-    batch_size=4,
+    batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
@@ -51,7 +51,7 @@ train_dataloader = dict(
             img_path='img_dir/train', seg_map_path='ann_dir/train'),
         pipeline=train_pipeline))
 val_dataloader = dict(
-    batch_size=4,
+    batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
