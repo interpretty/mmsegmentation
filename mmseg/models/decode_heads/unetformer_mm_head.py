@@ -14,7 +14,7 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 from einops import rearrange
-from ..backbones.swin import ShiftWindowMSA
+from ..backbones.swin_mm import ShiftWindowMSA
 
 
 class SeparableConvBN(nn.Sequential):

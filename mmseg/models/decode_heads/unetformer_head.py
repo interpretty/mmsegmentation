@@ -15,16 +15,16 @@ import torch.nn.functional as F
 from einops import rearrange
 
 
-class SeparableConvBN(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, dilation=1,
-                 norm_layer=nn.BatchNorm2d):
-        super(SeparableConvBN, self).__init__(
-            nn.Conv2d(in_channels, in_channels, kernel_size, stride=stride, dilation=dilation,
-                      padding=((stride - 1) + dilation * (kernel_size - 1)) // 2,
-                      groups=in_channels, bias=False),
-            norm_layer(out_channels),
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
-        )
+# class SeparableConvBN(nn.Sequential):
+#     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, dilation=1,
+#                  norm_layer=nn.BatchNorm2d):
+#         super(SeparableConvBN, self).__init__(
+#             nn.Conv2d(in_channels, in_channels, kernel_size, stride=stride, dilation=dilation,
+#                       padding=((stride - 1) + dilation * (kernel_size - 1)) // 2,
+#                       groups=in_channels, bias=False),
+#             norm_layer(out_channels),
+#             nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+#         )
 
 
 class Mlp(nn.Module):
@@ -63,7 +63,11 @@ class GlobalLocalAttention(nn.Module):
         self.qkv = ConvModule(dim, 3 * dim, kernel_size=1, bias=qkv_bias, norm_cfg=None, act_cfg=None)
         self.local1 = ConvModule(dim, dim, kernel_size=3, padding=1, norm_cfg=dict(type='BN'), act_cfg=None)
         self.local2 = ConvModule(dim, dim, kernel_size=1, norm_cfg=dict(type='BN'), act_cfg=None)
-        self.proj = SeparableConvBN(dim, dim, kernel_size=window_size)
+        # self.proj = SeparableConvBN(dim, dim, kernel_size=window_size)
+
+        self.proj = DepthwiseSeparableConvModule(dim, dim, kernel_size=window_size, stride=1, dilation=1,
+                 padding=((1 - 1) + 1 * (window_size - 1)) // 2,
+                 dw_norm_cfg=dict(type='BN'), dw_act_cfg=None, pw_act_cfg=None)
 
         self.attn_x = nn.AvgPool2d(kernel_size=(window_size, 1), stride=1, padding=(window_size // 2 - 1, 0))
         self.attn_y = nn.AvgPool2d(kernel_size=(1, window_size), stride=1, padding=(0, window_size // 2 - 1))
@@ -197,7 +201,12 @@ class FeatureRefinementHead(nn.Module):
                                 nn.Sigmoid())
 
         self.shortcut = ConvModule(decode_channels, decode_channels, kernel_size=1, norm_cfg=dict(type='BN'))
-        self.proj = SeparableConvBN(decode_channels, decode_channels, kernel_size=3)
+        # self.proj = SeparableConvBN(decode_channels, decode_channels, kernel_size=3)
+
+        self.proj = DepthwiseSeparableConvModule(decode_channels, decode_channels, kernel_size=3, stride=1, dilation=1,
+                 padding=((1 - 1) + 1 * (3 - 1)) // 2,
+                 dw_norm_cfg=dict(type='BN'), dw_act_cfg=None, pw_act_cfg=None)
+
         self.act = nn.ReLU6()
 
     def forward(self, x):

@@ -10,4 +10,3 @@ model = dict(
     data_preprocessor=data_preprocessor,
     decode_head=dict(num_classes=6),
     auxiliary_head=dict(num_classes=6))
-

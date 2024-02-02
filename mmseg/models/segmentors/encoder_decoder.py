@@ -173,6 +173,7 @@ class EncoderDecoder(BaseSegmentor):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
+        # 为vaihingen 1024 数据集特别添加
 
         x = self.extract_feat(inputs)
 
@@ -239,12 +240,12 @@ class EncoderDecoder(BaseSegmentor):
             ]
         else:
             batch_img_metas = [
-                dict(
-                    ori_shape=inputs.shape[2:],
-                    img_shape=inputs.shape[2:],
-                    pad_shape=inputs.shape[2:],
-                    padding_size=[0, 0, 0, 0])
-            ] * inputs.shape[0]
+                                  dict(
+                                      ori_shape=inputs.shape[2:],
+                                      img_shape=inputs.shape[2:],
+                                      pad_shape=inputs.shape[2:],
+                                      padding_size=[0, 0, 0, 0])
+                              ] * inputs.shape[0]
 
         seg_logits = self.inference(inputs, batch_img_metas)
 

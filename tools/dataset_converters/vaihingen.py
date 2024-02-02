@@ -41,6 +41,15 @@ def clip_big_image(image_path, clip_save_dir, to_label=False):
     # whose size are all 512x512.
     image = mmcv.imread(image_path)
 
+    # 使image大小能够达到clip_size
+    # 获取图像的宽度和高度
+    height, width = image.shape[:2]
+    # 如果图像小于1024x1024像素
+    if width < args.clip_size or height < args.clip_size:
+        # 创建一个1024x1024的黑色图像
+        new_img = np.zeros((args.clip_size, args.clip_size, 3), np.uint8)
+        new_img[:height, :width] = image  # 将原始图像放置在新图像的右下角
+
     h, w, c = image.shape
     cs = args.clip_size
     ss = args.stride_size

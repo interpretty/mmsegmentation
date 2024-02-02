@@ -217,7 +217,7 @@ class ShiftWindowMSA(BaseModule):
             attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
             attn_mask = attn_mask.masked_fill(attn_mask != 0,
                                               float(-100.0)).masked_fill(
-                                                  attn_mask == 0, float(0.0))
+                attn_mask == 0, float(0.0))
         else:
             shifted_query = query
             attn_mask = None
@@ -225,7 +225,7 @@ class ShiftWindowMSA(BaseModule):
         # nW*B, window_size, window_size, C
         query_windows = self.window_partition(shifted_query)
         # nW*B, window_size*window_size, C
-        query_windows = query_windows.view(-1, self.window_size**2, C)
+        query_windows = query_windows.view(-1, self.window_size ** 2, C)
 
         # W-MSA/SW-MSA (nW*B, window_size*window_size, C)
         attn_windows = self.w_msa(query_windows, mask=attn_mask)
@@ -627,7 +627,7 @@ class SwinTransformer(BaseModule):
             if downsample:
                 in_channels = downsample.out_channels
 
-        self.num_features = [int(embed_dims * 2**i) for i in range(num_layers)]
+        self.num_features = [int(embed_dims * 2 ** i) for i in range(num_layers)]
         # Add a norm layer for each output
         for i in out_indices:
             layer = build_norm_layer(norm_cfg, self.num_features[i])[1]
@@ -651,7 +651,7 @@ class SwinTransformer(BaseModule):
         for i in range(1, self.frozen_stages + 1):
 
             if (i - 1) in self.out_indices:
-                norm_layer = getattr(self, f'norm{i-1}')
+                norm_layer = getattr(self, f'norm{i - 1}')
                 norm_layer.eval()
                 for param in norm_layer.parameters():
                     param.requires_grad = False
@@ -723,8 +723,8 @@ class SwinTransformer(BaseModule):
                     if nH1 != nH2:
                         print_log(f'Error in loading {table_key}, pass')
                     elif L1 != L2:
-                        S1 = int(L1**0.5)
-                        S2 = int(L2**0.5)
+                        S1 = int(L1 ** 0.5)
+                        S2 = int(L2 ** 0.5)
                         table_pretrained_resized = F.interpolate(
                             table_pretrained.permute(1, 0).reshape(
                                 1, nH1, S1, S1),
