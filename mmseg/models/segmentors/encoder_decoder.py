@@ -197,7 +197,7 @@ class EncoderDecoder(BaseSegmentor):
 
                 return losses
             else:
-                losses.update(loss_decode[0])
+                losses.update(loss_decode)
 
                 if self.with_auxiliary_head:
                     loss_aux = self._auxiliary_head_forward_train(x, data_samples)

@@ -47,17 +47,17 @@ class WindowMSA(BaseModule):
         head_embed_dims = embed_dims // num_heads
         self.scale = qk_scale or head_embed_dims ** -0.5
 
-        # define a parameter table of relative position bias
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1),
-                        num_heads))  # 2*Wh-1 * 2*Ww-1, nH
-
-        # About 2x faster than original impl
-        Wh, Ww = self.window_size
-        rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
-        rel_position_index = rel_index_coords + rel_index_coords.T
-        rel_position_index = rel_position_index.flip(1).contiguous()
-        self.register_buffer('relative_position_index', rel_position_index)
+        # # define a parameter table of relative position bias
+        # self.relative_position_bias_table = nn.Parameter(
+        #     torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1),
+        #                 num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+        #
+        # # About 2x faster than original impl
+        # Wh, Ww = self.window_size
+        # rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
+        # rel_position_index = rel_index_coords + rel_index_coords.T
+        # rel_position_index = rel_position_index.flip(1).contiguous()
+        # self.register_buffer('relative_position_index', rel_position_index)
 
         self.qkv = nn.Linear(embed_dims, embed_dims * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop_rate)
@@ -69,10 +69,11 @@ class WindowMSA(BaseModule):
     def init_weights(self):
         trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def forward(self, x, mask=None, attn1=None, attn2=None):
+    def forward(self, x, mask=None, global_tuple=None):
         """
         Args:
 
+            global_tuple:
             x (tensor): input features with shape of (num_windows*B, N, C)
             mask (tensor | None, Optional): mask with shape of (num_windows,
                 Wh*Ww, Wh*Ww), value should be between (-inf, 0].
@@ -86,14 +87,23 @@ class WindowMSA(BaseModule):
         q, k, v = qkv[0], qkv[1], qkv[2]
         q = q * self.scale
 
-        # 生成相对位置特征
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1],
-            self.window_size[0] * self.window_size[1],
-            -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        # # 生成相对位置特征
+        # relative_position_bias = self.relative_position_bias_table[
+        #     self.relative_position_index.view(-1)].view(
+        #     self.window_size[0] * self.window_size[1],
+        #     self.window_size[0] * self.window_size[1],
+        #     -1)  # Wh*Ww,Wh*Ww,nH
+        # relative_position_bias = relative_position_bias.permute(
+        #     2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+
+        attn1 = None
+        attn2 = None
+
+        relative_position_bias = global_tuple[0]
+        if len(global_tuple) == 2:
+            relative_position_bias, attn1 = global_tuple
+        elif len(global_tuple) == 3:
+            relative_position_bias, attn1, attn2 = global_tuple
 
         if attn1 is None:
             attn = (q @ k.transpose(-2, -1))
@@ -289,13 +299,17 @@ class WindowMSA(BaseModule):
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn1, attn2
 
-    @staticmethod
-    def double_step_seq(step1, len1, step2, len2):
-        seq1 = torch.arange(0, step1 * len1, step1)
-        seq2 = torch.arange(0, step2 * len2, step2)
-        return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
+        global_tuple.append(attn1)
+        global_tuple.append(attn2)
+
+        return x, global_tuple
+
+    # @staticmethod
+    # def double_step_seq(step1, len1, step2, len2):
+    #     seq1 = torch.arange(0, step1 * len1, step1)
+    #     seq2 = torch.arange(0, step2 * len2, step2)
+    #     return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
 
 
 class ShiftWindowMSA(BaseModule):
@@ -352,7 +366,7 @@ class ShiftWindowMSA(BaseModule):
 
         self.drop = build_dropout(dropout_layer)
 
-    def forward(self, query, hw_shape, attn1=None, attn2=None):
+    def forward(self, query, hw_shape, global_tuple=None):
         B, L, C = query.shape
         H, W = hw_shape
         assert L == H * W, 'input feature has wrong size'
@@ -374,7 +388,7 @@ class ShiftWindowMSA(BaseModule):
         query_windows = query_windows.view(-1, self.window_size ** 2, C)
 
         # W-MSA/SW-MSA (nW*B, window_size*window_size, C)
-        attn_windows, attn1, attn2 = self.w_msa(query_windows, mask=attn_mask, attn1=attn1, attn2=attn2)
+        attn_windows, global_tuple = self.w_msa(query_windows, mask=attn_mask, global_tuple=global_tuple)
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size,
@@ -391,7 +405,7 @@ class ShiftWindowMSA(BaseModule):
         x = x.view(B, H * W, C)
 
         x = self.drop(x)
-        return x, attn1, attn2
+        return x, global_tuple
 
     def window_reverse(self, windows, H, W):
         """

@@ -14,7 +14,6 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 import os
-import math
 from ..backbones.swin_wr_opt_cmp_simplify_verify import ShiftWindowMSA
 # from ..backbones.swin_wr_opt_cmp_simplify import ShiftWindowMSA
 # from ..backbones.swin_wr_opt import ShiftWindowMSA
@@ -78,12 +77,12 @@ class GlobalLocalAttention(nn.Module):
         x = F.pad(x, pad=(0, 1, 0, 1), mode='reflect')
         return x
 
-    def forward(self, x, global_tuple=None):
+    def forward(self, x, attn1=None, attn2=None):
         local = self.local2(x) + self.local1(x)
 
         hw_shape = (x.shape[2], x.shape[3])
         attn = x.flatten(2).transpose(1, 2)
-        attn, global_tuple = self.attn(attn, hw_shape, global_tuple)
+        attn, attn1, attn2 = self.attn(attn, hw_shape, attn1, attn2)
         attn = attn.transpose(1, 2)
         attn = attn.reshape(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
 
@@ -95,7 +94,7 @@ class GlobalLocalAttention(nn.Module):
         out = self.proj(out)
         # print(out.size())
 
-        return out, global_tuple
+        return out, attn1, attn2
 
 
 class Block(nn.Module):
@@ -111,26 +110,27 @@ class Block(nn.Module):
                        drop=drop)
         self.norm2 = norm_layer(dim)
 
-    def forward(self, x, global_tuple=None):
-        x, global_tuple = self.attn(self.norm1(x), global_tuple)
+    def forward(self, x, attn1=None, attn2=None):
+        x, attn1, attn2 = self.attn(self.norm1(x), attn1, attn2)
         x = x + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
-        return x, global_tuple
+        return x, attn1, attn2
 
 
 class WF(nn.Module):
-    def __init__(self, in_channels=128, decode_channels=128, scale_factor=2, eps=1e-8):
+    def __init__(self, in_channels=128, decode_channels=128, eps=1e-8):
         super(WF, self).__init__()
-        self.scale_factor = scale_factor
+
         self.pre_conv = ConvModule(in_channels, decode_channels, kernel_size=1, norm_cfg=None, act_cfg=None)
         self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.eps = eps
         self.post_conv = ConvModule(decode_channels, decode_channels, kernel_size=3, padding=1,
-                                    norm_cfg=dict(type='BN'), act_cfg=dict(type='ReLU'))
+                                    norm_cfg=dict(type='BN'),
+                                    act_cfg=dict(type='ReLU'))
 
     def forward(self, x, res):
-        x = F.interpolate(x, scale_factor=self.scale_factor, mode='bilinear', align_corners=False)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
         weights = nn.ReLU()(self.weights)
         fuse_weights = weights / (torch.sum(weights, dim=0) + self.eps)
         x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
@@ -138,10 +138,17 @@ class WF(nn.Module):
         return x
 
 
-# 和WF一起用的FeatureRefinementHead实现
 class FeatureRefinementHead(nn.Module):
     def __init__(self, in_channels=64, decode_channels=64):
         super().__init__()
+        self.pre_conv = ConvModule(in_channels, decode_channels, kernel_size=1, norm_cfg=None, act_cfg=None)
+
+        self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.eps = 1e-8
+        self.post_conv = ConvModule(decode_channels, decode_channels, kernel_size=3, padding=1,
+                                    norm_cfg=dict(type='BN'),
+                                    act_cfg=dict(type='ReLU'))
+
         self.pa = nn.Sequential(
             nn.Conv2d(decode_channels, decode_channels, kernel_size=3, padding=1, groups=decode_channels),
             nn.Sigmoid())
@@ -154,15 +161,17 @@ class FeatureRefinementHead(nn.Module):
                                 nn.Sigmoid())
 
         self.shortcut = ConvModule(decode_channels, decode_channels, kernel_size=1, norm_cfg=dict(type='BN'))
-        # self.proj = SeparableConvBN(decode_channels, decode_channels, kernel_size=3)
-
         self.proj = DepthwiseSeparableConvModule(decode_channels, decode_channels, kernel_size=3, stride=1, dilation=1,
                                                  padding=((1 - 1) + 1 * (3 - 1)) // 2,
                                                  dw_norm_cfg=dict(type='BN'), dw_act_cfg=None, pw_act_cfg=None)
-
         self.act = nn.ReLU6()
 
-    def forward(self, x):
+    def forward(self, x, res):
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        weights = nn.ReLU()(self.weights)
+        fuse_weights = weights / (torch.sum(weights, dim=0) + self.eps)
+        x = fuse_weights[0] * self.pre_conv(res) + fuse_weights[1] * x
+        x = self.post_conv(x)
         shortcut = self.shortcut(x)
         pa = self.pa(x) * x
         ca = self.ca(x) * x
@@ -173,72 +182,15 @@ class FeatureRefinementHead(nn.Module):
         return x
 
 
-class PosBias(nn.Module):
-    def __init__(self, window_size=64, num_heads=8):
-        super(PosBias, self).__init__()
-        self.window_size = (window_size, window_size)
-        self.num_heads = num_heads
-        # define a parameter table of relative position bias
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1),
-                        num_heads))  # 2*Wh-1 * 2*Ww-1, nH
-
-        # About 2x faster than original impl
-        Wh, Ww = self.window_size
-        rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
-        rel_position_index = rel_index_coords + rel_index_coords.T
-        rel_position_index = rel_position_index.flip(1).contiguous()
-        self.register_buffer('relative_position_index', rel_position_index)
-
-    @staticmethod
-    def double_step_seq(step1, len1, step2, len2):
-        seq1 = torch.arange(0, step1 * len1, step1)
-        seq2 = torch.arange(0, step2 * len2, step2)
-        return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
-
-    def forward(self, window_size):
-        # 生成相对位置特征
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)].view(
-            window_size * window_size,
-            window_size * window_size,
-            -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-        return relative_position_bias
-
-
-def rpb_per(rpb, ws):
-    # 获取第二维的开根号结果
-    ws_rpb = math.sqrt(rpb.size(1))
-
-    # 计算ws_rpb/ws为2的几次方并作为循环次数
-    loop_count = int(math.log2(ws_rpb/ws))
-
-    # 根据循环次数进行操作
-    for i in range(loop_count):
-        divisor = 2 ** (i + 1)
-        ws_next = int(ws_rpb // divisor)
-        rpb = rpb.reshape(-1, ws_next, 2, ws_next, 2, ws_next, 2, ws_next, 2)
-        rpb = rpb.permute(0, 1, 3, 5, 7, 2, 4, 6, 8)
-        rpb = rpb.reshape(-1, ws_next * ws_next, ws_next * ws_next, 16)
-        rpb = rpb.sum(dim=-1) / 16
-
-    return rpb
-
-
 @MODELS.register_module()
-class UNetFormerHeadWR(BaseDecodeHead):
+class UNetFormerHeadWR_V(BaseDecodeHead):
     def __init__(self,
                  encoder_channels=(256, 512, 1024, 2048),
                  decode_channels=256,
                  dropout=0.1,
                  window_size=(64, 32, 16),
                  **kwargs):
-        super(UNetFormerHeadWR, self).__init__(**kwargs)
-
-        self.window_size = window_size
-        self.pb = PosBias(window_size=window_size[0], num_heads=8)
+        super(UNetFormerHeadWR_V, self).__init__(**kwargs)
 
         self.pre_conv = ConvModule(
             encoder_channels[-1],
@@ -253,8 +205,14 @@ class UNetFormerHeadWR(BaseDecodeHead):
         self.b2 = Block(dim=decode_channels, num_heads=8, window_size=window_size[-3])
         self.p2 = WF(encoder_channels[-3], decode_channels)
 
-        self.p1 = WF(encoder_channels[-4], decode_channels)
-        self.fr = FeatureRefinementHead(decode_channels, decode_channels)
+        self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
+
+        global_windows = window_size
+
+        # self.segmentation_head = nn.Sequential(
+        #     ConvModule(decode_channels, decode_channels, norm_cfg=dict(type='BN'), act_cfg=dict(type='ReLU')),
+        #     nn.Dropout2d(p=dropout, inplace=True),
+        #     ConvModule(decode_channels, self.num_classes, kernel_size=1))
 
     def forward(self, inputs):
         # analysis_results = get_model_complexity_info(self.b4, input_shape=(256, 16, 16))
@@ -269,24 +227,19 @@ class UNetFormerHeadWR(BaseDecodeHead):
         # torch.save(inputs, os.path.join(save_path, 'input1.pt'))
         # torch.save(inputs, os.path.join(save_path, 'input3.pt'))
 
-        relative_position_bias = self.pb(window_size=self.window_size[0])
-        global_tuple = [relative_position_bias]
-
-        x = self.pre_conv(inputs[-1])
-        global_tuple[0] = rpb_per(relative_position_bias, self.window_size[-1])
-        x, global_tuple = self.b4(x, global_tuple)
+        x, attn1, attn2 = self.b4(self.pre_conv(inputs[-1]))
+        h4 = x
 
         x = self.p3(x, inputs[-2])
-        global_tuple[0] = rpb_per(relative_position_bias, self.window_size[-2])
-        x, global_tuple = self.b3(x, global_tuple)
+        x, attn1, attn2 = self.b3(x, attn1)
+        h3 = x
 
         x = self.p2(x, inputs[-3])
-        global_tuple[0] = rpb_per(relative_position_bias, self.window_size[-3])
-        x, _ = self.b2(x, global_tuple)
+        x, _, _ = self.b2(x, attn1, attn2)
+        h2 = x
 
         x = self.p1(x, inputs[-4])
-        x = self.fr(x)
 
         # x = self.segmentation_head(x)
         x = self.cls_seg(x)
-        return x
+        return (x, h4, h3, h2)

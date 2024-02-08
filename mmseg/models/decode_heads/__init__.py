@@ -41,7 +41,7 @@ from .unet_attn_head import UNetAttnHead
 from .unetformer_head import UNetFormerHead
 from .unetformer_mm_head import UNetFormerHeadMM
 from .unetformer_wr_head import UNetFormerHeadWR
-from .unetformer_wr_head import UNetFormerHeadWR
+from .unetformer_wr_head_verify import UNetFormerHeadWR_V
 from .unetformer_aux_head import UNetFormerAuxHead
 
 __all__ = [

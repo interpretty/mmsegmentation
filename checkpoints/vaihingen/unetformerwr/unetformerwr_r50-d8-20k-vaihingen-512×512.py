@@ -40,9 +40,12 @@ model = dict(
         norm_cfg=dict(type='SyncBN', requires_grad=True),
         act_cfg=dict(type='ReLU')),
     auxiliary_head=dict(
-        type='UNetFormerAuxHead',
-        in_channels=256,
+        type='FCNHead',
+        in_channels=1024,
+        in_index=2,
         channels=256,
+        num_convs=1,
+        concat_input=False,
         dropout_ratio=0.1,
         num_classes=6,
         norm_cfg=dict(type='SyncBN', requires_grad=True),
@@ -141,7 +144,7 @@ train_dataloader = dict(
             dict(type='PackSegInputs')
         ]))
 val_dataloader = dict(
-    batch_size=1,
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
@@ -156,7 +159,7 @@ val_dataloader = dict(
             dict(type='PackSegInputs')
         ]))
 test_dataloader = dict(
-    batch_size=1,
+    batch_size=2,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
