@@ -7,7 +7,9 @@ from mmcv.cnn.bricks.transformer import build_dropout
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import trunc_normal_
 from mmengine.utils import to_2tuple
-import math
+import os
+
+save_path = r'C:\PY\mmsegmentation\checkpoints\vaihingen\unetformerwr\20231102_012650\save'
 
 
 class WindowMSA(BaseModule):
@@ -45,17 +47,17 @@ class WindowMSA(BaseModule):
         head_embed_dims = embed_dims // num_heads
         self.scale = qk_scale or head_embed_dims ** -0.5
 
-        # define a parameter table of relative position bias
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1),
-                        num_heads))  # 2*Wh-1 * 2*Ww-1, nH
-
-        # About 2x faster than original impl
-        Wh, Ww = self.window_size
-        rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
-        rel_position_index = rel_index_coords + rel_index_coords.T
-        rel_position_index = rel_position_index.flip(1).contiguous()
-        self.register_buffer('relative_position_index', rel_position_index)
+        # # define a parameter table of relative position bias
+        # self.relative_position_bias_table = nn.Parameter(
+        #     torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1),
+        #                 num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+        #
+        # # About 2x faster than original impl
+        # Wh, Ww = self.window_size
+        # rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
+        # rel_position_index = rel_index_coords + rel_index_coords.T
+        # rel_position_index = rel_position_index.flip(1).contiguous()
+        # self.register_buffer('relative_position_index', rel_position_index)
 
         self.qkv = nn.Linear(embed_dims, embed_dims * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop_rate)
@@ -67,10 +69,11 @@ class WindowMSA(BaseModule):
     def init_weights(self):
         trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def forward(self, x, mask=None, attn1=None, attn2=None):
+    def forward(self, x, mask=None, global_tuple=None):
         """
         Args:
 
+            global_tuple:
             x (tensor): input features with shape of (num_windows*B, N, C)
             mask (tensor | None, Optional): mask with shape of (num_windows,
                 Wh*Ww, Wh*Ww), value should be between (-inf, 0].
@@ -84,16 +87,19 @@ class WindowMSA(BaseModule):
         q, k, v = qkv[0], qkv[1], qkv[2]
         q = q * self.scale
 
-        # 生成相对位置特征
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1],
-            self.window_size[0] * self.window_size[1],
-            -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        # # 生成相对位置特征
+        # relative_position_bias = self.relative_position_bias_table[
+        #     self.relative_position_index.view(-1)].view(
+        #     self.window_size[0] * self.window_size[1],
+        #     self.window_size[0] * self.window_size[1],
+        #     -1)  # Wh*Ww,Wh*Ww,nH
+        # relative_position_bias = relative_position_bias.permute(
+        #     2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
 
-        if attn1 is None:
+        attn2 = None
+
+        if len(global_tuple) == 1:
+            relative_position_bias = global_tuple[0]
             attn = (q @ k.transpose(-2, -1))
             attn = attn + relative_position_bias.unsqueeze(0)
 
@@ -110,12 +116,120 @@ class WindowMSA(BaseModule):
             # 点乘置零
             attn1 = attn * mask_diag
 
+            global_tuple.append(attn1)
+
+        elif len(global_tuple) == 2:
+            relative_position_bias, attn1 = global_tuple
+            _, _, L, _ = attn1.shape
+
+            # # 保存q
+            # torch.save(q, os.path.join(save_path, 'q2.pt'))
+            # 1、求对角区域的attn
+            # 以2为最小置换尺寸对q、k进行置换
+            # 一次置换
+            q = q.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
+                B, self.num_heads, ws // 2 * ws // 2, 4, -1).contiguous()
+            k = k.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
+                B, self.num_heads, ws // 2 * ws // 2, 4, -1).contiguous()
+
+            # 求对角线区域的细化attn
+            attn = q @ k.transpose(-2, -1)
+
+            # 2、相对位置矩阵的分区域切分
+            # 相对位置参数
+            rpbp_diag = relative_position_bias.unsqueeze(1).unsqueeze(0)
+
+            # 4、分别与relative_position_bias和attn相乘的v
+            # 一次置换
+            v = v.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
+                B, self.num_heads, ws // 2 * ws // 2, 4, -1).contiguous()
+
+            if attn2 is None:
+                # # （1）先变形为基础形式，方便转换和求和
+                # v = v.view(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
+                # （4）与attn1相乘的v
+                v_attn1 = torch.sum(v, dim=3, keepdim=False) / 4
+                # （2）与diag(attn与rpbp_diag)相乘的v
+                v_diag = v
+
+            # 5、相乘
+            # （1）
+            attn_rpbp_diag = attn + rpbp_diag
+            attn_rpbp_diag = self.softmax(attn_rpbp_diag)  # 仅能保证每次attention_map在归一化范围内
+            # wrong:/(ws*ws) 为正则化，相当于每个attn_rpbp_diag元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
+            # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
+            # 考虑到当前区块应该更重要一些，故右1/(ws/2*ws/2)变为1/(ws/4*ws/4)
+            attn_rpbp_diag = attn_rpbp_diag / (ws // 4 * ws // 4)
+
+            # x_diag = (attn_rpbp_diag @ v_diag)
+            x_diag = attn_rpbp_diag @ v_diag
+            x_diag = x_diag.view(B, self.num_heads, ws * ws, -1)
+
+            # # （2）
+            # # 获得非对角区域
+            # if attn2 is None:
+            #     # （3）与major(rpbp_major)相乘的v
+            #     v_rpbp_major = v.reshape(B, self.num_heads, ws // 2 * ws // 2 * 4, -1)
+            # # rpbp_major = relative_position_bias_per
+            # # rpbp_major_diag = rpbp_major.diagonal(dim1=1, dim2=2)
+            # # rpbp_major_diag.fill_(0)
+            # # rpbp_major = rpbp_major.permute(0, 1, 3, 2, 4).reshape(
+            # #     self.num_heads, ws * ws, ws * ws).unsqueeze(0).contiguous()
+            # # 利用掩膜点乘实现attn对角线置零
+            # mask_side = self.window_size[0] // 2 * self.window_size[1] // 2
+            # # 生成一个全为1的二维Tensor
+            # mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
+            # indices = torch.arange(mask_side)
+            # mask_diag[indices, indices] = 0
+            # mask_diag = mask_diag.unsqueeze(-1).unsqueeze(-1)
+            # # 点乘置零
+            # rpbp_major = relative_position_bias_per * mask_diag
+            # rpbp_major = rpbp_major.permute(0, 1, 3, 2, 4).reshape(
+            #     self.num_heads, ws * ws, ws * ws).unsqueeze(0).contiguous()
+            # x_rpbp_major = rpbp_major @ v_rpbp_major
+
+            # （3）
+            x_attn1 = attn1 @ v_attn1
+
+            # # 求和
+            # x = x_diag.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
+            #     + x_rpbp_major.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
+            #     + x_attn1.reshape(B, self.num_heads, L, -1, C // self.num_heads)
+
+            # 求和
+            x = x_diag.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
+                + x_attn1.reshape(B, self.num_heads, L, -1, C // self.num_heads)
+
+            # 置换回去
+            # 一次置换
+            if attn2 is None:
+                x = x.view(B, self.num_heads, ws // 2, ws // 2, 2, 2, C // self.num_heads).permute(
+                    0, 2, 4, 3, 5, 1, 6).reshape(B, ws * ws, -1).contiguous()
+
+            # 传导
+            if attn2 is None:
+                # 利用掩膜点乘实现attn2对角线置零
+                mask_side = 2 * 2
+                # 生成一个全为1的二维Tensor
+                mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
+                indices = torch.arange(mask_side)
+                mask_diag[indices, indices] = 0
+                # 点乘置零
+                attn2 = attn_rpbp_diag * mask_diag
+
+            global_tuple.append(attn2)
+
         else:
+            relative_position_bias, attn1, attn2 = global_tuple
             _, _, L, _ = attn1.shape
 
             # 1、求对角区域的attn
             # 以2为最小置换尺寸对q、k进行置换
             # 一次置换
+
+            # # 保存q
+            # torch.save(q, os.path.join(save_path, 'q2.pt'))
+
             q = q.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
                 B, self.num_heads, ws // 2 * ws // 2, 4, -1).contiguous()
             k = k.view(B, self.num_heads, ws // 2, 2, ws // 2, 2, -1).permute(0, 1, 2, 4, 3, 5, 6).reshape(
@@ -131,33 +245,7 @@ class WindowMSA(BaseModule):
 
             # 2、相对位置矩阵的分区域切分
             # 相对位置参数
-            # 分区域切分
-            # relative_position_bias进行permute符合原对应关系
-            # 以2为最小置换尺寸进行置换
-            # 一次置换
-            relative_position_bias_per = relative_position_bias.contiguous().view(
-                self.num_heads, ws // 2, 2, ws // 2, 2, ws // 2, 2, ws // 2, 2).permute(
-                0, 1, 3, 2, 4, 5, 7, 6, 8).reshape(
-                self.num_heads, ws // 2 * ws // 2, 4, ws // 2 * ws // 2, 4).permute(
-                0, 1, 3, 2, 4).contiguous()
-            # 二次置换
-            if attn2 is not None:
-                relative_position_bias_per = relative_position_bias_per.reshape(
-                    self.num_heads, ws // 4, 2, ws // 4, 2, ws // 4, 2, ws // 4, 2, 4, 4).permute(
-                    0, 1, 3, 2, 4, 5, 7, 6, 8, 9, 10).reshape(
-                    self.num_heads, ws // 4 * ws // 4 * 2 * 2, ws // 4 * ws // 4 * 2 * 2, 4, 4).contiguous()
-
-            # 3、分多个区域切分的attn
-            # 第一层attn
-            attn1
-
-            # 第二层
-            if attn2 is None:
-                attn
-            else:
-                attn2
-                # 第三层
-                attn
+            rpbp_diag = relative_position_bias.unsqueeze(1).unsqueeze(0)
 
             # 4、分别与relative_position_bias和attn相乘的v
             # 一次置换
@@ -170,12 +258,7 @@ class WindowMSA(BaseModule):
                     0, 1, 2, 4, 3, 5, 6, 7).reshape(B, self.num_heads, ws // 4 * ws // 4, 2 * 2, 4, -1).contiguous()
 
             if attn2 is None:
-                # # （1）先变形为基础形式，方便转换和求和
-                # v = v.view(B, self.num_heads, ws // 2 * ws // 2, 4, -1)
-                # （4）与attn1相乘的v
-                v_attn1 = torch.sum(v, dim=3, keepdim=False) / 4
-                # （2）与diag(attn与rpbp_diag)相乘的v
-                v_diag = v
+                pass
             else:
                 # # （1）先变形为基础形式，方便转换和求和
                 # v = v.view(B, self.num_heads, ws // 4 * ws // 4, 2 * 2, 4, -1)
@@ -190,56 +273,43 @@ class WindowMSA(BaseModule):
 
             # 5、相乘
             # （1）
-
-            # 获得斜对角区域
-            # rpbp_diag = relative_position_bias_per.diagonal(dim1=1, dim2=2).permute(
-            #     0, 3, 1, 2).unsqueeze(0).contiguous()
-            # 利用掩膜点乘获得对角线
-            mask_side = self.window_size[0] // 2 * self.window_size[1] // 2
-            mask_diag = torch.eye(mask_side, device='cuda:0').unsqueeze(-1).unsqueeze(-1)
-            rpbp_diag = relative_position_bias_per * mask_diag
-            rpbp_diag = rpbp_diag.permute(0, 3, 4, 1, 2)
-            mask_identity = torch.ones(mask_side, 1, device='cuda:0')
-            rpbp_diag = rpbp_diag @ mask_identity
-            rpbp_diag = rpbp_diag.permute(0, 3, 4, 1, 2).squeeze().contiguous()
-
             attn_rpbp_diag = attn + rpbp_diag
             attn_rpbp_diag = self.softmax(attn_rpbp_diag)  # 仅能保证每次attention_map在归一化范围内
-
             # wrong:/(ws*ws) 为正则化，相当于每个attn_rpbp_diag元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
             # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
             # right:每四个元素加起来，和应为1/(ws/2*ws/2),
+            # 考虑到当前区块应该更重要一些，故右1/(ws/2*ws/2)变为1/(ws/4*ws/4)
+            attn_rpbp_diag = attn_rpbp_diag / (ws // 4 * ws // 4)
+
             # x_diag = (attn_rpbp_diag @ v_diag)
-            x_diag = (attn_rpbp_diag @ v_diag) / (ws // 2 * ws // 2)
+            x_diag = attn_rpbp_diag @ v_diag
             x_diag = x_diag.view(B, self.num_heads, ws * ws, -1)
 
-            if attn2 is None:
-                # （3）与major(rpbp_major)相乘的v
-                v_rpbp_major = v.reshape(B, self.num_heads, ws // 2 * ws // 2 * 4, -1)
-            else:
-                # （3）与major(rpbp_major)相乘的v
-                v_rpbp_major = v.reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2 * 4, -1)
-
-            # （2）
-            # 获得非对角区域
-            # rpbp_major = relative_position_bias_per
-            # rpbp_major_diag = rpbp_major.diagonal(dim1=1, dim2=2)
-            # rpbp_major_diag.fill_(0)
+            # # （2）
+            # # 获得非对角区域
+            # if attn2 is None:
+            #     pass
+            # else:
+            #     # （3）与major(rpbp_major)相乘的v
+            #     v_rpbp_major = v.reshape(B, self.num_heads, ws // 4 * ws // 4 * 2 * 2 * 4, -1)
+            # # rpbp_major = relative_position_bias_per
+            # # rpbp_major_diag = rpbp_major.diagonal(dim1=1, dim2=2)
+            # # rpbp_major_diag.fill_(0)
+            # # rpbp_major = rpbp_major.permute(0, 1, 3, 2, 4).reshape(
+            # #     self.num_heads, ws * ws, ws * ws).unsqueeze(0).contiguous()
+            # # 利用掩膜点乘实现attn对角线置零
+            # mask_side = self.window_size[0] // 2 * self.window_size[1] // 2
+            # # 生成一个全为1的二维Tensor
+            # mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
+            # indices = torch.arange(mask_side)
+            # mask_diag[indices, indices] = 0
+            # mask_diag = mask_diag.unsqueeze(-1).unsqueeze(-1)
+            # # 点乘置零
+            # rpbp_major = relative_position_bias_per * mask_diag
             # rpbp_major = rpbp_major.permute(0, 1, 3, 2, 4).reshape(
             #     self.num_heads, ws * ws, ws * ws).unsqueeze(0).contiguous()
-            # 利用掩膜点乘实现attn对角线置零
-            mask_side = self.window_size[0] // 2 * self.window_size[1] // 2
-            # 生成一个全为1的二维Tensor
-            mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
-            indices = torch.arange(mask_side)
-            mask_diag[indices, indices] = 0
-            mask_diag = mask_diag.unsqueeze(-1).unsqueeze(-1)
-            # 点乘置零
-            rpbp_major = relative_position_bias_per * mask_diag
-            rpbp_major = rpbp_major.permute(0, 1, 3, 2, 4).reshape(
-                self.num_heads, ws * ws, ws * ws).unsqueeze(0).contiguous()
-
-            x_rpbp_major = rpbp_major @ v_rpbp_major
+            #
+            # x_rpbp_major = rpbp_major @ v_rpbp_major
 
             # （3）
             x_attn1 = attn1 @ v_attn1
@@ -248,48 +318,39 @@ class WindowMSA(BaseModule):
             if attn2 is not None:
                 x_attn2 = attn2 @ v_attn2
 
-            # 求和
+            # # 求和
+            # x = x_diag.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
+            #     + x_rpbp_major.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
+            #     + x_attn1.reshape(B, self.num_heads, L, -1, C // self.num_heads)
             x = x_diag.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
-                + x_rpbp_major.reshape(B, self.num_heads, L, -1, C // self.num_heads) \
                 + x_attn1.reshape(B, self.num_heads, L, -1, C // self.num_heads)
             if attn2 is not None:
                 x = x.reshape(B, self.num_heads, L, 4, 4, C // self.num_heads) \
                     + x_attn2.reshape(B, self.num_heads, L, 4, 1, C // self.num_heads)
 
             # 置换回去
-            # 一次置换
-            if attn2 is None:
-                x = x.view(B, self.num_heads, ws // 2, ws // 2, 2, 2, C // self.num_heads).permute(
-                    0, 2, 4, 3, 5, 1, 6).reshape(B, ws * ws, -1).contiguous()
-            # 两次置换
-            else:
+            # 同时完成两次置换
+            if attn2 is not None:
                 x = x.view(B, self.num_heads, ws // 4, ws // 4, 2, 2, 2, 2, C // self.num_heads).permute(
                     0, 2, 4, 6, 3, 5, 7, 1, 8).reshape(B, ws * ws, -1).contiguous()
-                # 保存x
-                # torch.save(q, os.path.join(save_path, 'x1.pt'))
-                # # 保存x
-                # torch.save(q, os.path.join(save_path, 'x2.pt'))
+            # # 两次置换
+            # x = x.view(B, self.num_heads, ws // 2, ws // 2, 2, 2, C // self.num_heads).permute(
+            #     0, 2, 4, 3, 5, 1, 6).reshape(B, ws * ws, -1).contiguous()
 
-            # 传导
-            if attn2 is None:
-                # 利用掩膜点乘实现attn2对角线置零
-                mask_side = 2 * 2
-                # 生成一个全为1的二维Tensor
-                mask_diag = torch.ones(mask_side, mask_side, device='cuda:0')
-                indices = torch.arange(mask_side)
-                mask_diag[indices, indices] = 0
-                # 点乘置零
-                attn2 = attn_rpbp_diag * mask_diag
+            # 保存x
+            # torch.save(q, os.path.join(save_path, 'x1.pt'))
+            # # 保存x
+            # torch.save(q, os.path.join(save_path, 'x2.pt'))
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn1, attn2
+        return x, global_tuple
 
-    @staticmethod
-    def double_step_seq(step1, len1, step2, len2):
-        seq1 = torch.arange(0, step1 * len1, step1)
-        seq2 = torch.arange(0, step2 * len2, step2)
-        return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
+    # @staticmethod
+    # def double_step_seq(step1, len1, step2, len2):
+    #     seq1 = torch.arange(0, step1 * len1, step1)
+    #     seq2 = torch.arange(0, step2 * len2, step2)
+    #     return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
 
 
 class ShiftWindowMSA(BaseModule):
@@ -346,7 +407,7 @@ class ShiftWindowMSA(BaseModule):
 
         self.drop = build_dropout(dropout_layer)
 
-    def forward(self, query, hw_shape, attn1=None, attn2=None):
+    def forward(self, query, hw_shape, global_tuple=None):
         B, L, C = query.shape
         H, W = hw_shape
         assert L == H * W, 'input feature has wrong size'
@@ -368,7 +429,7 @@ class ShiftWindowMSA(BaseModule):
         query_windows = query_windows.view(-1, self.window_size ** 2, C)
 
         # W-MSA/SW-MSA (nW*B, window_size*window_size, C)
-        attn_windows, attn1, attn2 = self.w_msa(query_windows, mask=attn_mask, attn1=attn1, attn2=attn2)
+        attn_windows, global_tuple = self.w_msa(query_windows, mask=attn_mask, global_tuple=global_tuple)
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size,
@@ -385,7 +446,7 @@ class ShiftWindowMSA(BaseModule):
         x = x.view(B, H * W, C)
 
         x = self.drop(x)
-        return x, attn1, attn2
+        return x, global_tuple
 
     def window_reverse(self, windows, H, W):
         """

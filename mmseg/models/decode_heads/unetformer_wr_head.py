@@ -188,7 +188,10 @@ class PosBias(nn.Module):
         rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
         rel_position_index = rel_index_coords + rel_index_coords.T
         rel_position_index = rel_position_index.flip(1).contiguous()
-        self.register_buffer('relative_position_index', rel_position_index)
+        if window_size == 2:
+            self.register_buffer('relative_position_index_2', rel_position_index)
+        else:
+            self.register_buffer('relative_position_index_1', rel_position_index)
 
     @staticmethod
     def double_step_seq(step1, len1, step2, len2):
@@ -197,9 +200,13 @@ class PosBias(nn.Module):
         return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
 
     def forward(self, window_size):
+        if window_size == 2:
+            relative_position_index = self.relative_position_index_2
+        else:
+            relative_position_index = self.relative_position_index_1
         # 生成相对位置特征
         relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)].view(
+            relative_position_index.view(-1)].view(
             window_size * window_size,
             window_size * window_size,
             -1)  # Wh*Ww,Wh*Ww,nH
@@ -208,23 +215,23 @@ class PosBias(nn.Module):
         return relative_position_bias
 
 
-def rpb_per(rpb, ws):
-    # 获取第二维的开根号结果
-    ws_rpb = math.sqrt(rpb.size(1))
-
-    # 计算ws_rpb/ws为2的几次方并作为循环次数
-    loop_count = int(math.log2(ws_rpb/ws))
-
-    # 根据循环次数进行操作
-    for i in range(loop_count):
-        divisor = 2 ** (i + 1)
-        ws_next = int(ws_rpb // divisor)
-        rpb = rpb.reshape(-1, ws_next, 2, ws_next, 2, ws_next, 2, ws_next, 2)
-        rpb = rpb.permute(0, 1, 3, 5, 7, 2, 4, 6, 8)
-        rpb = rpb.reshape(-1, ws_next * ws_next, ws_next * ws_next, 16)
-        rpb = rpb.sum(dim=-1) / 16
-
-    return rpb
+# def rpb_per(rpb, ws):
+#     # 获取第二维的开根号结果
+#     ws_rpb = math.sqrt(rpb.size(1))
+#
+#     # 计算ws_rpb/ws为2的几次方并作为循环次数
+#     loop_count = int(math.log2(ws_rpb/ws))
+#
+#     # 根据循环次数进行操作
+#     for i in range(loop_count):
+#         divisor = 2 ** (i + 1)
+#         ws_next = int(ws_rpb // divisor)
+#         rpb = rpb.reshape(-1, ws_next, 2, ws_next, 2, ws_next, 2, ws_next, 2)
+#         rpb = rpb.permute(0, 1, 3, 5, 7, 2, 4, 6, 8)
+#         rpb = rpb.reshape(-1, ws_next * ws_next, ws_next * ws_next, 16)
+#         rpb = rpb.sum(dim=-1) / 16
+#
+#     return rpb
 
 
 @MODELS.register_module()
@@ -238,7 +245,9 @@ class UNetFormerHeadWR(BaseDecodeHead):
         super(UNetFormerHeadWR, self).__init__(**kwargs)
 
         self.window_size = window_size
-        self.pb = PosBias(window_size=window_size[0], num_heads=8)
+        self.pb4 = PosBias(window_size=window_size[-1], num_heads=8)
+        self.pb3 = PosBias(window_size=2, num_heads=8)
+        self.pb2 = PosBias(window_size=2, num_heads=8)
 
         self.pre_conv = ConvModule(
             encoder_channels[-1],
@@ -269,19 +278,16 @@ class UNetFormerHeadWR(BaseDecodeHead):
         # torch.save(inputs, os.path.join(save_path, 'input1.pt'))
         # torch.save(inputs, os.path.join(save_path, 'input3.pt'))
 
-        relative_position_bias = self.pb(window_size=self.window_size[0])
-        global_tuple = [relative_position_bias]
-
         x = self.pre_conv(inputs[-1])
-        global_tuple[0] = rpb_per(relative_position_bias, self.window_size[-1])
+        global_tuple = [self.pb4(window_size=self.window_size[-1])]
         x, global_tuple = self.b4(x, global_tuple)
 
         x = self.p3(x, inputs[-2])
-        global_tuple[0] = rpb_per(relative_position_bias, self.window_size[-2])
+        global_tuple[0] = self.pb3(window_size=2)
         x, global_tuple = self.b3(x, global_tuple)
 
         x = self.p2(x, inputs[-3])
-        global_tuple[0] = rpb_per(relative_position_bias, self.window_size[-3])
+        global_tuple[0] = self.pb2(window_size=2)
         x, _ = self.b2(x, global_tuple)
 
         x = self.p1(x, inputs[-4])
