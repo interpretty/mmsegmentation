@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from mmcv.cnn import ConvModule, Scale, DepthwiseSeparableConvModule
+from mmcv.cnn import ConvModule, DepthwiseSeparableConvModule
 import torch.utils.checkpoint as cp
 from mmseg.registry import MODELS
 from .decode_head import BaseDecodeHead
@@ -12,7 +12,7 @@ from mmcv.cnn.bricks import DropPath
 from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 from einops import rearrange
-from ..backbones.swin import ShiftWindowMSA, SwinBlock
+from ..backbones.swin_wr_UA_v1 import ShiftWindowMSA, SwinBlock
 from mmcv.cnn.bricks.transformer import FFN
 
 
@@ -179,29 +179,76 @@ class WF(nn.Module):
 #         return x
 
 
+class PosBias(nn.Module):
+    def __init__(self, window_size=64, num_heads=8):
+        super(PosBias, self).__init__()
+        self.window_size = (window_size, window_size)
+        self.num_heads = num_heads
+        # define a parameter table of relative position bias
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros((2 * self.window_size[0] - 1) * (2 * self.window_size[1] - 1),
+                        num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+
+        # About 2x faster than original impl
+        Wh, Ww = self.window_size
+        rel_index_coords = self.double_step_seq(2 * Ww - 1, Wh, 1, Ww)
+        rel_position_index = rel_index_coords + rel_index_coords.T
+        rel_position_index = rel_position_index.flip(1).contiguous()
+        if window_size == 2:
+            self.register_buffer('relative_position_index_2', rel_position_index)
+        else:
+            self.register_buffer('relative_position_index_1', rel_position_index)
+
+    @staticmethod
+    def double_step_seq(step1, len1, step2, len2):
+        seq1 = torch.arange(0, step1 * len1, step1)
+        seq2 = torch.arange(0, step2 * len2, step2)
+        return (seq1[:, None] + seq2[None, :]).reshape(1, -1)
+
+    def forward(self, window_size):
+        if window_size == 2:
+            relative_position_index = self.relative_position_index_2
+        else:
+            relative_position_index = self.relative_position_index_1
+        # 生成相对位置特征
+        relative_position_bias = self.relative_position_bias_table[
+            relative_position_index.view(-1)].view(
+            window_size * window_size,
+            window_size * window_size,
+            -1)  # Wh*Ww,Wh*Ww,nH
+        relative_position_bias = relative_position_bias.permute(
+            2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+        return relative_position_bias
+
+
 @MODELS.register_module()
-class UNetAttnHead(BaseDecodeHead):
+class UNetAttnHeadWR(BaseDecodeHead):
     def __init__(self,
                  encoder_channels=(256, 512, 1024, 2048),
                  decode_channels=256,
                  dropout=0.1,
-                 window_size=8,
+                 window_size=(64, 32, 16),
                  **kwargs):
-        super(UNetAttnHead, self).__init__(**kwargs)
+        super(UNetAttnHeadWR, self).__init__(**kwargs)
+
+        self.window_size = window_size
+        self.pb4 = PosBias(window_size=window_size[-1], num_heads=8)
+        self.pb3 = PosBias(window_size=2, num_heads=8)
+        self.pb2 = PosBias(window_size=2, num_heads=8)
 
         self.pre_conv = ConvModule(
             encoder_channels[-1],
             decode_channels,
             kernel_size=1,
             norm_cfg=dict(type='BN'))
-        self.b4 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size,
+        self.b4 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size[-1],
                             feedforward_channels=decode_channels * 4, shift=False)
 
-        self.b3 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size,
+        self.b3 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size[-2],
                             feedforward_channels=decode_channels * 4, shift=False)
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size,
+        self.b2 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size[-3],
                             feedforward_channels=decode_channels * 4, shift=False)
         self.p2 = WF(encoder_channels[-3], decode_channels)
 
@@ -218,51 +265,35 @@ class UNetAttnHead(BaseDecodeHead):
         #     ConvModule(decode_channels, self.num_classes, kernel_size=1))
 
     def forward(self, inputs):
-        # 实现原始图片信息传入的判断
-        if len(inputs) == 2:
-            ori_img = inputs[1]
-            inputs = inputs[0]
-        else:
-            ori_img = None
-
         x = self.pre_conv(inputs[-1])
-
+        global_tuple = [self.pb4(window_size=self.window_size[-1])]
         ori_shape = x.size()
         hw_shape = x.size()[-2:]
         x = x.flatten(2).transpose(1, 2)
-        x = self.b4(x, hw_shape)
+        x, global_tuple = self.b4(x, hw_shape, global_tuple)
         x = x.transpose(1, 2)
         x = x.reshape(ori_shape)
 
         x = self.p3(x, inputs[-2])
-
+        global_tuple[0] = self.pb3(window_size=2)
         ori_shape = x.size()
         hw_shape = x.size()[-2:]
         x = x.flatten(2).transpose(1, 2)
-        x = self.b3(x, hw_shape)
+        x, global_tuple = self.b3(x, hw_shape, global_tuple)
         x = x.transpose(1, 2)
         x = x.reshape(ori_shape)
 
         x = self.p2(x, inputs[-3])
-
+        global_tuple[0] = self.pb2(window_size=2)
         ori_shape = x.size()
         hw_shape = x.size()[-2:]
         x = x.flatten(2).transpose(1, 2)
-        x = self.b2(x, hw_shape)
+        x, _ = self.b2(x, hw_shape, global_tuple)
         x = x.transpose(1, 2)
         x = x.reshape(ori_shape)
 
         x = self.p1(x, inputs[-4])
         # x = self.fr(x)
-        if ori_img is not None:
-            # 实现原始图片信息的传入
-
-            # 实现最终结果为512*512大小
-            # x = self.b1(x)
-
-            # 将ori_img进行卷积
-            x = self.p0(x, ori_img)
-            # 把feature_refinement里的内容往后调整
 
         # x = self.segmentation_head(x)
         # x = self.fr(x)

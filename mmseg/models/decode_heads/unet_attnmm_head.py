@@ -180,28 +180,28 @@ class WF(nn.Module):
 
 
 @MODELS.register_module()
-class UNetAttnHead(BaseDecodeHead):
+class UNetAttnMMHead(BaseDecodeHead):
     def __init__(self,
                  encoder_channels=(256, 512, 1024, 2048),
                  decode_channels=256,
                  dropout=0.1,
                  window_size=8,
                  **kwargs):
-        super(UNetAttnHead, self).__init__(**kwargs)
+        super(UNetAttnMMHead, self).__init__(**kwargs)
 
         self.pre_conv = ConvModule(
             encoder_channels[-1],
             decode_channels,
             kernel_size=1,
             norm_cfg=dict(type='BN'))
-        self.b4 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size,
+        self.b4 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=16,
                             feedforward_channels=decode_channels * 4, shift=False)
 
-        self.b3 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size,
+        self.b3 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=32,
                             feedforward_channels=decode_channels * 4, shift=False)
         self.p3 = WF(encoder_channels[-2], decode_channels)
 
-        self.b2 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=window_size,
+        self.b2 = SwinBlock(embed_dims=decode_channels, num_heads=8, window_size=64,
                             feedforward_channels=decode_channels * 4, shift=False)
         self.p2 = WF(encoder_channels[-3], decode_channels)
 

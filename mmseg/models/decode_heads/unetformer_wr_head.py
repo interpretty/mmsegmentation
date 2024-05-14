@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 from mmcv.cnn import ConvModule, DepthwiseSeparableConvModule
-from mmcv.cnn import ConvModule, Scale
-from mmengine.utils import to_2tuple
 import torch.utils.checkpoint as cp
 from mmseg.registry import MODELS
 from .decode_head import BaseDecodeHead
@@ -15,7 +13,7 @@ from mmengine.model.weight_init import trunc_normal_
 import torch.nn.functional as F
 import os
 import math
-from ..backbones.swin_wr_opt_cmp_simplify_verify import ShiftWindowMSA
+from ..backbones.swin_wr_UF_v1 import ShiftWindowMSA
 # from ..backbones.swin_wr_opt_cmp_simplify import ShiftWindowMSA
 # from ..backbones.swin_wr_opt import ShiftWindowMSA
 # from ..backbones.swin_wr import ShiftWindowMSA

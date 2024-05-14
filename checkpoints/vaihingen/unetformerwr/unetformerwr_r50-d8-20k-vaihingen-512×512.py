@@ -121,7 +121,7 @@ tta_pipeline = [
                     }]])
 ]
 train_dataloader = dict(
-    batch_size=2,
+    batch_size=4,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
@@ -144,7 +144,7 @@ train_dataloader = dict(
             dict(type='PackSegInputs')
         ]))
 val_dataloader = dict(
-    batch_size=2,
+    batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
@@ -159,7 +159,7 @@ val_dataloader = dict(
             dict(type='PackSegInputs')
         ]))
 test_dataloader = dict(
-    batch_size=2,
+    batch_size=1,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),

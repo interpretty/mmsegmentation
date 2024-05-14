@@ -97,6 +97,24 @@ class IoUMetric(BaseMetric):
                 if data_sample.get('reduce_zero_label', False):
                     output_mask = output_mask + 1
                 output = Image.fromarray(output_mask.astype(np.uint8))
+
+                # 将 output_mask 转换为 numpy 数组
+                output_mask = np.array(output)
+                # 定义 METAINFO
+                METAINFO = {
+                    'classes': ('impervious_surface', 'building', 'low_vegetation', 'tree', 'car', 'clutter'),
+                    'palette': [[255, 255, 255], [0, 0, 255], [0, 255, 255], [0, 255, 0], [255, 255, 0], [255, 0, 0]]
+                }
+                # 创建一个新的掩码图像
+                mask_image = np.zeros((output_mask.shape[0], output_mask.shape[1], 3), dtype=np.uint8)
+                # 遍历每个像素，将对应的像素值映射为 RGB 颜色值
+                for i in range(output_mask.shape[0]):
+                    for j in range(output_mask.shape[1]):
+                        pixel_value = output_mask[i, j]
+                        mask_image[i, j] = METAINFO['palette'][pixel_value - 1]
+                # 将 numpy 数组转换为 PIL 图像
+                output = Image.fromarray(mask_image)
+
                 output.save(png_filename)
 
     def compute_metrics(self, results: list) -> Dict[str, float]:

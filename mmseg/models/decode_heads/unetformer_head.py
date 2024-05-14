@@ -306,15 +306,12 @@ class UNetFormerHead(BaseDecodeHead):
             ori_img = None
 
         x = self.b4(self.pre_conv(inputs[-1]))
-        h4 = x
 
         x = self.p3(x, inputs[-2])
         x = self.b3(x)
-        h3 = x
 
         x = self.p2(x, inputs[-3])
         x = self.b2(x)
-        h2 = x
 
         x = self.p1(x, inputs[-4])
         x = self.fr(x)
@@ -331,4 +328,4 @@ class UNetFormerHead(BaseDecodeHead):
         # x = self.segmentation_head(x)
         # x = self.fr(x)
         x = self.cls_seg(x)
-        return (x, h4, h3, h2)
+        return x

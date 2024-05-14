@@ -38,6 +38,8 @@ from .vpd_depth_head import VPDDepthHead
 from .unet_head import UNetHead
 from .attn_unet_head import AttnUNetHead
 from .unet_attn_head import UNetAttnHead
+from .unet_attnmm_head import UNetAttnMMHead
+from .unet_attn_wr_head import UNetAttnHeadWR
 from .unetformer_head import UNetFormerHead
 from .unetformer_mm_head import UNetFormerHeadMM
 from .unetformer_wr_head import UNetFormerHeadWR
@@ -54,5 +56,5 @@ __all__ = [
     'KernelUpdateHead', 'KernelUpdator', 'MaskFormerHead', 'Mask2FormerHead',
     'LightHamHead', 'PIDHead', 'DDRHead', 'VPDDepthHead', 'SideAdapterCLIPHead',
     'UNetHead', 'AttnUNetHead', 'UNetAttnHead', 'UNetFormerHead', 'UNetFormerHeadMM',
-    'UNetFormerHeadWR', 'UNetFormerAuxHead'
+    'UNetFormerHeadWR', 'UNetFormerAuxHead', 'UNetAttnHeadWR', 'UNetAttnMMHead'
 ]

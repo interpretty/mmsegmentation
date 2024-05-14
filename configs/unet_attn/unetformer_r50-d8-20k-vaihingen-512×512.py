@@ -10,3 +10,4 @@ model = dict(
     data_preprocessor=data_preprocessor,
     decode_head=dict(num_classes=6),
     auxiliary_head=dict(num_classes=6))
+train_dataloader = dict(batch_size=4)

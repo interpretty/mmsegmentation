@@ -3,7 +3,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn.bricks.transformer import build_dropout
+import torch.utils.checkpoint as cp
+from mmcv.cnn import build_norm_layer
+from mmcv.cnn.bricks.transformer import FFN, build_dropout
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import trunc_normal_
 from mmengine.utils import to_2tuple
@@ -65,9 +67,9 @@ class WindowMSA(BaseModule):
         self.proj_drop = nn.Dropout(proj_drop_rate)
         self.softmax = nn.Softmax(dim=-1)
 
-    # init_weights的作用
-    def init_weights(self):
-        trunc_normal_(self.relative_position_bias_table, std=0.02)
+    # # init_weights的作用
+    # def init_weights(self):
+    #     trunc_normal_(self.relative_position_bias_table, std=0.02)
 
     def forward(self, x, mask=None, global_tuple=None):
         """
@@ -149,7 +151,7 @@ class WindowMSA(BaseModule):
             # wrong:/(ws*ws) 为正则化，相当于每个attn_rpbp_diag元素对应大小是上一层次带下的1/16，但四个相加后为1/4，
             # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
             # 考虑到当前区块应该更重要一些，故右1/(ws/2*ws/2)变为1/(ws/4*ws/4)
-            attn_rpbp_diag = attn_rpbp_diag / (ws // 4 * ws // 4)
+            attn_rpbp_diag = attn_rpbp_diag / (ws // 2 * ws // 2)
 
             # x_diag = (attn_rpbp_diag @ v_diag)
             x_diag = attn_rpbp_diag @ v_diag
@@ -268,7 +270,7 @@ class WindowMSA(BaseModule):
             # 上一层次共(ws/2*ws/2)个元素和为1，故当前层次为1/(ws/2*ws/2)/16*4
             # right:每四个元素加起来，和应为1/(ws/2*ws/2),
             # 考虑到当前区块应该更重要一些，故右1/(ws/2*ws/2)变为1/(ws/4*ws/4)
-            attn_rpbp_diag = attn_rpbp_diag / (ws // 4 * ws // 4)
+            attn_rpbp_diag = attn_rpbp_diag / (ws // 2 * ws // 2)
 
             # x_diag = (attn_rpbp_diag @ v_diag)
             x_diag = attn_rpbp_diag @ v_diag
@@ -467,3 +469,86 @@ class ShiftWindowMSA(BaseModule):
         windows = x.permute(0, 1, 3, 2, 4, 5).contiguous()
         windows = windows.view(-1, window_size, window_size, C)
         return windows
+
+
+class SwinBlock(BaseModule):
+    """"
+    Args:
+        embed_dims (int): The feature dimension.
+        num_heads (int): Parallel attention heads.
+        feedforward_channels (int): The hidden dimension for FFNs.
+        window_size (int, optional): The local window scale. Default: 7.
+        shift (bool, optional): whether to shift window or not. Default False.
+        qkv_bias (bool, optional): enable bias for qkv if True. Default: True.
+        qk_scale (float | None, optional): Override default qk scale of
+            head_dim ** -0.5 if set. Default: None.
+        drop_rate (float, optional): Dropout rate. Default: 0.
+        attn_drop_rate (float, optional): Attention dropout rate. Default: 0.
+        drop_path_rate (float, optional): Stochastic depth rate. Default: 0.
+        act_cfg (dict, optional): The config dict of activation function.
+            Default: dict(type='GELU').
+        norm_cfg (dict, optional): The config dict of normalization.
+            Default: dict(type='LN').
+        with_cp (bool, optional): Use checkpoint or not. Using checkpoint
+            will save some memory while slowing down the training speed.
+            Default: False.
+        init_cfg (dict | list | None, optional): The init config.
+            Default: None.
+    """
+
+    def __init__(self,
+                 embed_dims,
+                 num_heads,
+                 feedforward_channels,
+                 window_size=7,
+                 shift=False,
+                 qkv_bias=True,
+                 qk_scale=None,
+                 drop_rate=0.,
+                 attn_drop_rate=0.,
+                 drop_path_rate=0.,
+                 act_cfg=dict(type='GELU'),
+                 norm_cfg=dict(type='LN'),
+                 with_cp=False,
+                 init_cfg=None):
+
+        super().__init__(init_cfg=init_cfg)
+
+        self.with_cp = with_cp
+
+        self.norm1 = build_norm_layer(norm_cfg, embed_dims)[1]
+        self.attn = ShiftWindowMSA(
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=window_size // 2 if shift else 0,
+            qkv_bias=qkv_bias,
+            qk_scale=qk_scale,
+            attn_drop_rate=attn_drop_rate,
+            proj_drop_rate=drop_rate,
+            dropout_layer=dict(type='DropPath', drop_prob=drop_path_rate),
+            init_cfg=None)
+
+        self.norm2 = build_norm_layer(norm_cfg, embed_dims)[1]
+        self.ffn = FFN(
+            embed_dims=embed_dims,
+            feedforward_channels=feedforward_channels,
+            num_fcs=2,
+            ffn_drop=drop_rate,
+            dropout_layer=dict(type='DropPath', drop_prob=drop_path_rate),
+            act_cfg=act_cfg,
+            add_identity=True,
+            init_cfg=None)
+
+    def forward(self, x, hw_shape, global_tuple=None):
+        identity = x
+        x = self.norm1(x)
+        x, global_tuple = self.attn(x, hw_shape, global_tuple=global_tuple)
+
+        x = x + identity
+
+        identity = x
+        x = self.norm2(x)
+        x = self.ffn(x, identity=identity)
+
+        return x, global_tuple

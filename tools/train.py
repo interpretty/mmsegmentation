@@ -96,6 +96,8 @@ def main():
         # if 'runner_type' is set in the cfg
         runner = RUNNERS.build(cfg)
 
+    # runner.set_randomness(165028745)
+
     # start training
     runner.train()
 
