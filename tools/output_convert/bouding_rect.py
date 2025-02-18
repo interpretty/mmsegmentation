@@ -2,29 +2,29 @@ import cv2
 import os
 
 # 矩形区域参数
-a1, b1, c1, d1 = 78,	145,	256,	295  # 矩形1参数,替换为实际值或None
-a2, b2, c2, d2 = None, None, None, None  # 矩形2参数,替换为实际值或None
+a1, b1, c1, d1 = 50,	320,	180,	440  # 矩形1参数,替换为实际值或None
+a2, b2, c2, d2 = 270,	260,	415,	480  # 矩形2参数,替换为实际值或None
 a3, b3, c3, d3 = None, None, None, None  # 矩形3参数,替换为实际值或None
 
 # 绘制矩形的颜色 (R,G,B)
-rect_color = (220, 160, 160)  # 深紫色
+rect_color = (48, 0, 90)  # 深紫色
 
 # 输入目录
 input_dirs = [
-    "C:\\PY\\mmsegmentation\\checkpoints\\potsdam\\unetformerwr_80k\\test",
-    "C:\\PY\\mmsegmentation\\data\\potsdam\\ann_dir\\test",
-    "C:\\Users\\WIN\\Desktop\\Desktop\\potsdam\\unetformer",
-    "C:\\Users\\WIN\\Desktop\\Desktop\\potsdam\\danet",
-    "C:\\Users\\WIN\\Desktop\\Desktop\\potsdam\\deeplabv3plus",
-    "C:\\Users\\WIN\\Desktop\\Desktop\\potsdam\\ocrnet",
-    "C:\\Users\\WIN\\Desktop\\Desktop\\potsdam\\segformer"
+    r'E:\PY\mmsegmentation\checkpoints\potsdam\unetformerwr_best\test_convert',
+    r'E:\PY\mmsegmentation\data\potsdam\ann_dir\test',
+    r'E:\PY\mmsegmentation\checkpoints\potsdam\ocrnet',
+    r'E:\PY\mmsegmentation\checkpoints\potsdam\deeplabv3plus',
+    r'E:\PY\mmsegmentation\checkpoints\potsdam\segformer',
+    r'E:\PY\mmsegmentation\checkpoints\potsdam\maresunet',
+    r'E:\PY\mmsegmentation\checkpoints\potsdam\unetformer\test'
 ]
 
 # 输出目录
-output_dir = "C:\\Users\\WIN\\Desktop\\potsdam"
+output_dir = r'E:\PY\mmsegmentation\checkpoints\potsdam\first_paper'
 
 # 图像名称前缀
-pic_name = "2_13_5120_3072_5632_3584"
+pic_name = "4_14_3584_3584_4096_4096"
 
 for input_dir in input_dirs:
     # 构建输入文件名
