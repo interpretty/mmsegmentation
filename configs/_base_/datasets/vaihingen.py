@@ -1,6 +1,7 @@
 # dataset settings
 dataset_type = 'ISPRSDataset'
-data_root = 'C:/py/mmsegmentation/data/vaihingen'
+# data_root = 'C:/py/mmsegmentation/data/vaihingen'
+data_root = './data/vaihingen'
 crop_size = (512, 512)
 train_pipeline = [
     dict(type='LoadImageFromFile'),
